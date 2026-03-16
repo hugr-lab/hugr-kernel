@@ -18,6 +18,14 @@ go.work.sum
 /dist/
 /static/
 /hugr-kernel
+/extensions/jupyterlab/.yarn
+/extensions/jupyterlab/.yarnrc.yml
+/extensions/jupyterlab/node_modules
+/extensions/jupyterlab/yarn.lock
+/extensions/jupyterlab/lib/
+/extensions/jupyterlab/labextension/
+/extensions/jupyterlab/hugr_graphql_ide/
+
 
 # Python / uv
 .venv/

@@ -1,39 +1,41 @@
-BINARY := hugr-kernel
 KERNEL_DIR := $(HOME)/Library/Jupyter/kernels/hugr
 DUCKDB_KERNEL_DIR := $(CURDIR)/../duckdb-kernel
+EXT_DIR := $(CURDIR)/extensions/jupyterlab
+VENV_LABEXT := $(CURDIR)/.venv/share/jupyter/labextensions
 
-.PHONY: build install clean test copy-perspective
+.PHONY: build install clean test copy-perspective build-ext install-ext build-kernel
 
-build:
-	go build -o $(BINARY) ./cmd/hugr-kernel
+build: build-kernel build-ext
 
-install: build copy-perspective
+build-kernel:
+	go build -o $(CURDIR)/.venv/bin/hugr-kernel ./cmd/hugr-kernel/
+
+build-ext:
+	cd $(EXT_DIR) && uv run jlpm install && uv run jlpm build
+
+install: install-ext copy-perspective
 	mkdir -p $(KERNEL_DIR)
-	ln -sf $(CURDIR)/$(BINARY) $(KERNEL_DIR)/$(BINARY)
 	cp kernel/kernel.json $(KERNEL_DIR)/kernel.json
-	@# Update kernel.json to use absolute path
-	@sed -i'' -e 's|"hugr-kernel"|"$(KERNEL_DIR)/$(BINARY)"|' $(KERNEL_DIR)/kernel.json
-	@# Copy kernel logos
-	@cp kernel/logo-32x32.png kernel/logo-64x64.png $(KERNEL_DIR)/ 2>/dev/null || true
-	@# Symlink perspective static files next to binary
-	@if [ -d "$(CURDIR)/static/perspective" ]; then \
-		ln -sfn $(CURDIR)/static $(KERNEL_DIR)/static; \
-	fi
 	@echo "Kernel installed to $(KERNEL_DIR)"
 
+install-ext: build-ext
+	@mkdir -p $(VENV_LABEXT)/@hugr-lab
+	@ln -sfn $(EXT_DIR)/hugr_graphql_ide/labextension $(VENV_LABEXT)/@hugr-lab/jupyterlab-graphql-ide
+	@echo "Extension linked to $(VENV_LABEXT)/@hugr-lab/jupyterlab-graphql-ide"
+
 copy-perspective:
-	@mkdir -p static/perspective
-	@if [ -d "$(DUCKDB_KERNEL_DIR)/extensions/jupyterlab/hugr_perspective/labextension/static/perspective" ]; then \
-		cp $(DUCKDB_KERNEL_DIR)/extensions/jupyterlab/hugr_perspective/labextension/static/perspective/* static/perspective/ 2>/dev/null || true; \
-		echo "Perspective static files copied from duckdb-kernel"; \
+	@if [ -d "$(DUCKDB_KERNEL_DIR)/extensions/jupyterlab/hugr_perspective/labextension" ]; then \
+		mkdir -p $(VENV_LABEXT)/@hugr-lab; \
+		ln -sfn $(DUCKDB_KERNEL_DIR)/extensions/jupyterlab/hugr_perspective/labextension $(VENV_LABEXT)/@hugr-lab/perspective-viewer; \
+		echo "Perspective viewer extension linked"; \
 	else \
-		echo "Perspective static files not found (build duckdb-kernel extensions first)"; \
+		echo "Perspective viewer not found (build duckdb-kernel extension first)"; \
 	fi
 
-test: install
-	uv run jupyter kernelspec list
-	@echo "Kernel installed. Run 'uv run jupyter lab' to test."
+test:
+	uv run jupyter labextension list
+	uv run jupyter server extension list
+	@echo "Run 'uv run jupyter lab' to test."
 
 clean:
-	rm -f $(BINARY)
-	rm -rf static/
+	cd $(EXT_DIR) && rm -rf lib hugr_graphql_ide/labextension node_modules

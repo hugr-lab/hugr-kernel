@@ -11,11 +11,14 @@ import (
 	"syscall"
 	"time"
 
+	"path/filepath"
+
 	"github.com/google/uuid"
 	"github.com/hugr-lab/hugr-kernel/internal/connection"
 	"github.com/hugr-lab/hugr-kernel/internal/kernel"
 	"github.com/hugr-lab/hugr-kernel/internal/meta"
 	"github.com/hugr-lab/hugr-kernel/internal/result"
+	"github.com/hugr-lab/hugr-kernel/internal/schema"
 	"github.com/hugr-lab/hugr-kernel/internal/session"
 )
 
@@ -71,8 +74,14 @@ func main() {
 	reg := meta.NewRegistry()
 	meta.RegisterCommands(reg, sess, cm, startTime)
 
+	// Load connections from config file
+	loadConnectionsFromFile(cm)
+
+	// Create schema client for IDE features
+	sc := schema.NewClient()
+
 	// Create kernel
-	k := kernel.NewKernel(connInfo, sess, cm, sp, reg)
+	k := kernel.NewKernel(connInfo, sess, cm, sp, reg, sc)
 
 	// Context cancelled on SIGINT, SIGTERM, or SIGHUP (VS Code may send SIGHUP on close).
 	// The same context is passed to ZMQ sockets — cancellation unblocks Recv() calls.
@@ -125,13 +134,14 @@ func parseConnectionFile(path string) (*kernel.ConnectionInfo, error) {
 }
 
 // loadConnectionsFromEnv pre-populates connections from environment variables.
-// Supports HUGR_CONNECTIONS (JSON array) or individual HUGR_CONNECTION_<NAME> vars.
 func loadConnectionsFromEnv(cm *connection.Manager) {
-	// Try JSON array format
 	if env := os.Getenv("HUGR_CONNECTIONS"); env != "" {
 		var conns []struct {
-			Name string `json:"name"`
-			URL  string `json:"url"`
+			Name    string `json:"name"`
+			URL     string `json:"url"`
+			APIKey  string `json:"api_key,omitempty"`
+			Token   string `json:"token,omitempty"`
+			Role    string `json:"role,omitempty"`
 		}
 		if err := json.Unmarshal([]byte(env), &conns); err != nil {
 			log.Printf("Warning: failed to parse HUGR_CONNECTIONS: %v", err)
@@ -141,4 +151,43 @@ func loadConnectionsFromEnv(cm *connection.Manager) {
 			}
 		}
 	}
+}
+
+// loadConnectionsFromFile loads connections from ~/.hugr/connections.json.
+func loadConnectionsFromFile(cm *connection.Manager) {
+	// Check env override first
+	configPath := os.Getenv("HUGR_CONFIG_PATH")
+	if configPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return
+		}
+		configPath = filepath.Join(home, ".hugr", "connections.json")
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return // file doesn't exist, no problem
+	}
+
+	var cfg struct {
+		Connections []struct {
+			Name string `json:"name"`
+			URL  string `json:"url"`
+		} `json:"connections"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		log.Printf("Warning: failed to parse %s: %v", configPath, err)
+		return
+	}
+
+	for _, c := range cfg.Connections {
+		if c.Name != "" && c.URL != "" {
+			// Don't override env connections
+			if _, err := cm.Get(c.Name); err != nil {
+				cm.Add(c.Name, c.URL)
+			}
+		}
+	}
+	log.Printf("Loaded %d connections from %s", len(cfg.Connections), configPath)
 }

@@ -1,0 +1,64 @@
+{
+  "name": "hugr-graphql-ide",
+  "displayName": "Hugr GraphQL IDE",
+  "version": "0.1.0",
+  "description": "VS Code extension for Hugr GraphQL IDE",
+  "publisher": "hugr-lab",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": ["Programming Languages", "Notebooks"],
+  "activationEvents": [
+    "onLanguage:graphql",
+    "onNotebook:jupyter-notebook"
+  ],
+  "main": "./out/extension.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "clean": "rimraf out"
+  },
+  "dependencies": {
+    "prettier": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.0.0",
+    "rimraf": "^5.0.0"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "hugr-explorer",
+          "title": "Hugr GraphQL",
+          "icon": "resources/hugr-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "hugr-explorer": [
+        {
+          "id": "hugr-connections",
+          "name": "Connections"
+        },
+        {
+          "id": "hugr-catalog",
+          "name": "Catalog Explorer"
+        },
+        {
+          "id": "hugr-schema",
+          "name": "Schema Explorer"
+        }
+      ]
+    },
+    "languages": [
+      {
+        "id": "graphql",
+        "aliases": ["GraphQL"],
+        "extensions": [".graphql", ".gql"]
+      }
+    ]
+  }
+}

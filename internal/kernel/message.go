@@ -13,7 +13,7 @@ import (
 
 const (
 	Delimiter       = "<IDS|MSG>"
-	ProtocolVersion = "5.0"
+	ProtocolVersion = "5.4"
 )
 
 // Header represents a Jupyter message header.

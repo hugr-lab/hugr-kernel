@@ -7,9 +7,12 @@ import (
 	"sync"
 
 	zmq "github.com/go-zeromq/zmq4"
+	"github.com/hugr-lab/hugr-kernel/internal/completion"
 	"github.com/hugr-lab/hugr-kernel/internal/connection"
+	"github.com/hugr-lab/hugr-kernel/internal/hover"
 	"github.com/hugr-lab/hugr-kernel/internal/meta"
 	"github.com/hugr-lab/hugr-kernel/internal/result"
+	"github.com/hugr-lab/hugr-kernel/internal/schema"
 	"github.com/hugr-lab/hugr-kernel/internal/session"
 )
 
@@ -41,6 +44,11 @@ type Kernel struct {
 	metaReg     *meta.Registry
 	key         []byte
 
+	// IDE features
+	schemaClient *schema.Client
+	completer    *completion.Completer
+	inspector    *hover.Inspector
+
 	shellSocket   zmq.Socket
 	controlSocket zmq.Socket
 	iopubSocket   zmq.Socket
@@ -52,14 +60,17 @@ type Kernel struct {
 }
 
 // NewKernel creates a new kernel with the given connection info.
-func NewKernel(connInfo *ConnectionInfo, sess *session.Session, cm *connection.Manager, sp *result.Spool, reg *meta.Registry) *Kernel {
+func NewKernel(connInfo *ConnectionInfo, sess *session.Session, cm *connection.Manager, sp *result.Spool, reg *meta.Registry, sc *schema.Client) *Kernel {
 	return &Kernel{
-		connInfo:    connInfo,
-		session:     sess,
-		connManager: cm,
-		spool:       sp,
-		metaReg:     reg,
-		key:         []byte(connInfo.Key),
+		connInfo:     connInfo,
+		session:      sess,
+		connManager:  cm,
+		spool:        sp,
+		metaReg:      reg,
+		key:          []byte(connInfo.Key),
+		schemaClient: sc,
+		completer:    completion.NewCompleter(sc),
+		inspector:    hover.NewInspector(sc),
 	}
 }
 

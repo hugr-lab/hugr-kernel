@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/hugr-lab/query-engine/types"
 )
 
@@ -219,6 +220,17 @@ func (h *Handler) handleArrowPart(path, title, partID string, table types.ArrowT
 			Title: title,
 			Rows:  0,
 		}, fmt.Sprintf("[%s] (no rows)", title)
+	}
+
+	// Flatten complex types (Struct→dot-separated columns, List/Map/Union→JSON strings)
+	// so Perspective viewer can display them correctly.
+	if types.NeedsFlatten(records[0].Schema()) {
+		mem := memory.DefaultAllocator
+		for i, rec := range records {
+			flat := types.FlattenRecord(rec, mem)
+			rec.Release()
+			records[i] = flat
+		}
 	}
 
 	// Calculate total rows
