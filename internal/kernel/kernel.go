@@ -8,6 +8,7 @@ import (
 
 	zmq "github.com/go-zeromq/zmq4"
 	"github.com/hugr-lab/hugr-kernel/internal/connection"
+	"github.com/hugr-lab/hugr-kernel/internal/ide"
 	"github.com/hugr-lab/hugr-kernel/internal/meta"
 	"github.com/hugr-lab/hugr-kernel/internal/result"
 	"github.com/hugr-lab/hugr-kernel/internal/session"
@@ -39,6 +40,7 @@ type Kernel struct {
 	spool       *result.Spool
 	arrowServer *ArrowServer
 	metaReg     *meta.Registry
+	ide         *ide.Service
 	key         []byte
 
 	shellSocket   zmq.Socket
@@ -47,6 +49,8 @@ type Kernel struct {
 	iopubMu       sync.Mutex // protects concurrent writes to iopubSocket
 	stdinSocket   zmq.Socket
 	hbSocket      zmq.Socket
+
+	commReg *commRegistry // tracks active comm channels
 
 	cancel context.CancelFunc // set by Start, used by shutdown_request
 }
@@ -59,8 +63,15 @@ func NewKernel(connInfo *ConnectionInfo, sess *session.Session, cm *connection.M
 		connManager: cm,
 		spool:       sp,
 		metaReg:     reg,
+		ide:         ide.NewService(cm),
 		key:         []byte(connInfo.Key),
+		commReg:     newCommRegistry(),
 	}
+}
+
+// InvalidateIDECache clears all cached IDE data (completion, hover, explorer).
+func (k *Kernel) InvalidateIDECache() {
+	k.ide.InvalidateCache()
 }
 
 // Start initializes ZMQ sockets and begins the message loop.
@@ -100,6 +111,8 @@ func (k *Kernel) Start(ctx context.Context) error {
 			log.Printf("Warning: failed to start Arrow HTTP server: %v", err)
 		} else {
 			k.arrowServer = as
+			// Wire explorer HTTP endpoints to IDE service
+			as.SetExplorerHandler(newExplorerBridge(k.ide))
 		}
 	}
 

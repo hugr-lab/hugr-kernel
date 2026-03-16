@@ -1,0 +1,9 @@
+{
+  "jupyter.lab.setting-icon-class": "hugr-graphql-ide",
+  "jupyter.lab.setting-icon-label": "Hugr GraphQL IDE",
+  "title": "Hugr GraphQL IDE",
+  "description": "Settings for the Hugr GraphQL IDE extension",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}

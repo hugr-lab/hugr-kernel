@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling>=1.5.0", "jupyterlab>=4.0.0,<5", "hatch-jupyter-builder>=0.5"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hugr-graphql-ide"
+version = "0.1.0"
+description = "GraphQL IDE extension for Hugr Kernel in JupyterLab"
+license = "MIT"
+requires-python = ">=3.8"
+dependencies = ["jupyter_server>=2.0.0"]
+
+[project.entry-points."jupyterlab.extensions"]
+hugr_graphql_ide = "hugr_graphql_ide"
+
+[tool.hatch.build.targets.sdist]
+exclude = ["/.github", "/binder"]
+
+[tool.hatch.build.targets.wheel.shared-data]
+"hugr_graphql_ide/labextension" = "share/jupyter/labextensions/@hugr-lab/graphql-ide"
+"install.json" = "share/jupyter/labextensions/@hugr-lab/graphql-ide/install.json"
+
+[tool.hatch.build.hooks.jupyter-builder]
+dependencies = ["hatch-jupyter-builder>=0.5"]
+build-function = "hatch_jupyter_builder.npm_builder"
+ensured-targets = [
+    "hugr_graphql_ide/labextension/static/style.js",
+    "hugr_graphql_ide/labextension/package.json",
+]
+skip-if-exists = ["hugr_graphql_ide/labextension/static/style.js"]
+
+[tool.hatch.build.hooks.jupyter-builder.build-kwargs]
+build_cmd = "build:prod"
+npm = ["jlpm"]

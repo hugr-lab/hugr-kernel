@@ -69,10 +69,12 @@ func main() {
 	// Create meta command registry
 	startTime := time.Now()
 	reg := meta.NewRegistry()
-	meta.RegisterCommands(reg, sess, cm, startTime)
 
-	// Create kernel
+	// Create kernel (must be before RegisterCommands so we can pass cache invalidation)
 	k := kernel.NewKernel(connInfo, sess, cm, sp, reg)
+
+	// Register meta commands with cache invalidation callback
+	meta.RegisterCommands(reg, sess, cm, startTime, k.InvalidateIDECache)
 
 	// Context cancelled on SIGINT, SIGTERM, or SIGHUP (VS Code may send SIGHUP on close).
 	// The same context is passed to ZMQ sockets — cancellation unblocks Recv() calls.

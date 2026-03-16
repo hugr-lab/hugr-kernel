@@ -35,6 +35,18 @@ __pycache__/
 .ipynb_checkpoints/
 *.ipynb
 
+# JupyterLab extension build artifacts
+extensions/jupyterlab/lib/
+extensions/jupyterlab/node_modules/
+extensions/jupyterlab/hugr_graphql_ide/labextension/
+extensions/jupyterlab/.yarn/
+extensions/jupyterlab/.pnp.*
+extensions/jupyterlab/yarn.lock
+
+# VS Code extension build artifacts
+extensions/vscode/out/
+extensions/vscode/node_modules/
+
 # OS
 .DS_Store
 Thumbs.db

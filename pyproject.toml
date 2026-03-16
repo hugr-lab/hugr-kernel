@@ -6,6 +6,8 @@ requires-python = ">=3.11"
 dependencies = [
     "jupyterlab>=4.0",
     "hugr-perspective-viewer>=0.1.10",
+    "hugr-graphql-ide",
 ]
 
-[tool.uv]
+[tool.uv.sources]
+hugr-graphql-ide = { path = "extensions/jupyterlab", editable = true }

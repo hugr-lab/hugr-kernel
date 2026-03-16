@@ -11,17 +11,24 @@ import (
 	"github.com/hugr-lab/hugr-kernel/internal/session"
 )
 
+// CacheInvalidator is called when connection or auth state changes.
+type CacheInvalidator func()
+
 // RegisterCommands registers all meta commands into the registry.
-func RegisterCommands(reg *Registry, sess *session.Session, cm *connection.Manager, startTime time.Time) {
+func RegisterCommands(reg *Registry, sess *session.Session, cm *connection.Manager, startTime time.Time, opts ...CacheInvalidator) {
+	var invalidateCache func()
+	if len(opts) > 0 && opts[0] != nil {
+		invalidateCache = opts[0]
+	}
 	// Connection management
-	reg.Register("connect", connectCommand(cm))
-	reg.Register("use", useCommand(cm))
+	reg.Register("connect", connectCommand(cm, invalidateCache))
+	reg.Register("use", useCommand(cm, invalidateCache))
 	reg.Register("connections", connectionsCommand(cm))
 
 	// Authentication
-	reg.Register("auth", authCommand(cm))
-	reg.Register("key", keyCommand(cm))
-	reg.Register("token", tokenCommand(cm))
+	reg.Register("auth", authCommand(cm, invalidateCache))
+	reg.Register("key", keyCommand(cm, invalidateCache))
+	reg.Register("token", tokenCommand(cm, invalidateCache))
 	reg.Register("login", loginCommand(cm))
 	reg.Register("logout", logoutCommand(cm))
 
@@ -38,7 +45,7 @@ func RegisterCommands(reg *Registry, sess *session.Session, cm *connection.Manag
 	reg.Register("whoami", whoamiCommand(cm))
 }
 
-func connectCommand(cm *connection.Manager) CommandFunc {
+func connectCommand(cm *connection.Manager, invalidateCache func()) CommandFunc {
 	return func(ctx context.Context, cmd ParsedCommand) (*CommandResult, error) {
 		parts := strings.SplitN(cmd.Args, " ", 2)
 		if len(parts) < 2 {
@@ -47,6 +54,9 @@ func connectCommand(cm *connection.Manager) CommandFunc {
 		name := parts[0]
 		url := parts[1]
 		cm.Add(name, url)
+		if invalidateCache != nil {
+			invalidateCache()
+		}
 		isDefault := ""
 		if cm.DefaultName() == name {
 			isDefault = " (default)"
@@ -57,7 +67,7 @@ func connectCommand(cm *connection.Manager) CommandFunc {
 	}
 }
 
-func useCommand(cm *connection.Manager) CommandFunc {
+func useCommand(cm *connection.Manager, invalidateCache func()) CommandFunc {
 	return func(ctx context.Context, cmd ParsedCommand) (*CommandResult, error) {
 		name := strings.TrimSpace(cmd.Args)
 		if name == "" {
@@ -71,6 +81,9 @@ func useCommand(cm *connection.Manager) CommandFunc {
 		}
 		if err := cm.SetDefault(name); err != nil {
 			return nil, err
+		}
+		if invalidateCache != nil {
+			invalidateCache()
 		}
 		return &CommandResult{
 			Text: fmt.Sprintf("Default connection set to: %s", name),
@@ -116,7 +129,7 @@ func connectionsCommand(cm *connection.Manager) CommandFunc {
 	}
 }
 
-func authCommand(cm *connection.Manager) CommandFunc {
+func authCommand(cm *connection.Manager, invalidateCache func()) CommandFunc {
 	return func(ctx context.Context, cmd ParsedCommand) (*CommandResult, error) {
 		mode := strings.TrimSpace(cmd.Args)
 		if mode == "" {
@@ -137,13 +150,16 @@ func authCommand(cm *connection.Manager) CommandFunc {
 			return nil, fmt.Errorf("unknown auth mode: %s. Use: public, apikey, bearer, oidc", mode)
 		}
 
+		if invalidateCache != nil {
+			invalidateCache()
+		}
 		return &CommandResult{
 			Text: fmt.Sprintf("Auth mode set to: %s for %s", mode, conn.Name),
 		}, nil
 	}
 }
 
-func keyCommand(cm *connection.Manager) CommandFunc {
+func keyCommand(cm *connection.Manager, invalidateCache func()) CommandFunc {
 	return func(ctx context.Context, cmd ParsedCommand) (*CommandResult, error) {
 		key := strings.TrimSpace(cmd.Args)
 		if key == "" {
@@ -159,6 +175,9 @@ func keyCommand(cm *connection.Manager) CommandFunc {
 		}
 
 		conn.SetAPIKey(key)
+		if invalidateCache != nil {
+			invalidateCache()
+		}
 
 		return &CommandResult{
 			Text: fmt.Sprintf("API key set for: %s", conn.Name),
@@ -166,7 +185,7 @@ func keyCommand(cm *connection.Manager) CommandFunc {
 	}
 }
 
-func tokenCommand(cm *connection.Manager) CommandFunc {
+func tokenCommand(cm *connection.Manager, invalidateCache func()) CommandFunc {
 	return func(ctx context.Context, cmd ParsedCommand) (*CommandResult, error) {
 		token := strings.TrimSpace(cmd.Args)
 		if token == "" {
@@ -182,6 +201,9 @@ func tokenCommand(cm *connection.Manager) CommandFunc {
 		}
 
 		conn.SetBearerToken(token)
+		if invalidateCache != nil {
+			invalidateCache()
+		}
 
 		return &CommandResult{
 			Text: fmt.Sprintf("Bearer token set for: %s", conn.Name),

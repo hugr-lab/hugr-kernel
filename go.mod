@@ -8,9 +8,11 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hugr-lab/query-engine/client v0.3.5
 	github.com/hugr-lab/query-engine/types v0.3.5
+	github.com/vektah/gqlparser/v2 v2.5.32
 )
 
 require (
+	github.com/agnivade/levenshtein v1.2.1 // indirect
 	github.com/go-zeromq/goczmq/v4 v4.2.2 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect
@@ -18,7 +20,6 @@ require (
 	github.com/klauspost/compress v1.18.4 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.25 // indirect
-	github.com/vektah/gqlparser/v2 v2.5.32 // indirect
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect

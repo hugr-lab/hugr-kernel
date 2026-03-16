@@ -3,6 +3,7 @@ package kernel
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -29,9 +30,10 @@ const maxArrowRows = 5_000_000
 
 // ArrowServer serves Arrow IPC files over HTTP directly from the spool.
 type ArrowServer struct {
-	spool    *result.Spool
-	listener net.Listener
-	server   *http.Server
+	spool           *result.Spool
+	listener        net.Listener
+	server          *http.Server
+	explorerHandler ExplorerHandler
 }
 
 // NewArrowServer creates and starts an HTTP server on a random port.
@@ -50,6 +52,15 @@ func NewArrowServer(sp *result.Spool) (*ArrowServer, error) {
 	mux.HandleFunc("/arrow", as.handleArrow)
 	mux.HandleFunc("/arrow/stream", as.handleArrowStream)
 
+	// Explorer API endpoints (populated later via SetExplorerHandler)
+	mux.HandleFunc("/explorer/connections", as.handleExplorerConnections)
+	mux.HandleFunc("/explorer/logical", as.handleExplorerLogical)
+	mux.HandleFunc("/explorer/logical/children", as.handleExplorerLogicalChildren)
+	mux.HandleFunc("/explorer/schema", as.handleExplorerSchema)
+	mux.HandleFunc("/explorer/schema/children", as.handleExplorerSchemaChildren)
+	mux.HandleFunc("/explorer/detail", as.handleExplorerDetail)
+	mux.HandleFunc("/explorer/search", as.handleExplorerSearch)
+
 	// Serve perspective static files if available.
 	if exePath, err := os.Executable(); err == nil {
 		staticDir := filepath.Join(filepath.Dir(exePath), "static", "perspective")
@@ -61,7 +72,7 @@ func NewArrowServer(sp *result.Spool) (*ArrowServer, error) {
 	}
 
 	as.server = &http.Server{
-		Handler:      mux,
+		Handler:      corsMiddleware(mux),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 5 * time.Minute,
 		IdleTimeout:  60 * time.Second,
@@ -241,4 +252,98 @@ func addCORS(h http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Origin", corsOrigin())
 		h.ServeHTTP(w, r)
 	})
+}
+
+// corsMiddleware wraps an http.Handler to handle CORS preflight (OPTIONS) requests
+// and set CORS headers on all responses.
+func corsMiddleware(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := corsOrigin()
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// ExplorerHandler is implemented by the IDE layer to serve explorer data.
+type ExplorerHandler interface {
+	HandleConnections(w http.ResponseWriter, r *http.Request)
+	HandleLogical(w http.ResponseWriter, r *http.Request)
+	HandleLogicalChildren(w http.ResponseWriter, r *http.Request)
+	HandleSchema(w http.ResponseWriter, r *http.Request)
+	HandleSchemaChildren(w http.ResponseWriter, r *http.Request)
+	HandleDetail(w http.ResponseWriter, r *http.Request)
+	HandleSearch(w http.ResponseWriter, r *http.Request)
+}
+
+// SetExplorerHandler sets the handler for explorer API endpoints.
+func (as *ArrowServer) SetExplorerHandler(h ExplorerHandler) {
+	as.explorerHandler = h
+}
+
+func (as *ArrowServer) writeJSON(w http.ResponseWriter, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", corsOrigin())
+	json.NewEncoder(w).Encode(data)
+}
+
+func (as *ArrowServer) handleExplorerConnections(w http.ResponseWriter, r *http.Request) {
+	if as.explorerHandler != nil {
+		as.explorerHandler.HandleConnections(w, r)
+		return
+	}
+	as.writeJSON(w, map[string]any{"connections": []any{}})
+}
+
+func (as *ArrowServer) handleExplorerLogical(w http.ResponseWriter, r *http.Request) {
+	if as.explorerHandler != nil {
+		as.explorerHandler.HandleLogical(w, r)
+		return
+	}
+	as.writeJSON(w, map[string]any{"nodes": []any{}})
+}
+
+func (as *ArrowServer) handleExplorerLogicalChildren(w http.ResponseWriter, r *http.Request) {
+	if as.explorerHandler != nil {
+		as.explorerHandler.HandleLogicalChildren(w, r)
+		return
+	}
+	as.writeJSON(w, map[string]any{"nodes": []any{}})
+}
+
+func (as *ArrowServer) handleExplorerSchema(w http.ResponseWriter, r *http.Request) {
+	if as.explorerHandler != nil {
+		as.explorerHandler.HandleSchema(w, r)
+		return
+	}
+	as.writeJSON(w, map[string]any{"nodes": []any{}, "total": 0})
+}
+
+func (as *ArrowServer) handleExplorerSchemaChildren(w http.ResponseWriter, r *http.Request) {
+	if as.explorerHandler != nil {
+		as.explorerHandler.HandleSchemaChildren(w, r)
+		return
+	}
+	as.writeJSON(w, map[string]any{"nodes": []any{}})
+}
+
+func (as *ArrowServer) handleExplorerDetail(w http.ResponseWriter, r *http.Request) {
+	if as.explorerHandler != nil {
+		as.explorerHandler.HandleDetail(w, r)
+		return
+	}
+	http.Error(w, "not found", http.StatusNotFound)
+}
+
+func (as *ArrowServer) handleExplorerSearch(w http.ResponseWriter, r *http.Request) {
+	if as.explorerHandler != nil {
+		as.explorerHandler.HandleSearch(w, r)
+		return
+	}
+	as.writeJSON(w, map[string]any{"results": []any{}})
 }

@@ -445,16 +445,29 @@ wheels = [
 ]
 
 [[package]]
+name = "hugr-graphql-ide"
+version = "0.1.0"
+source = { editable = "extensions/jupyterlab" }
+dependencies = [
+    { name = "jupyter-server" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "jupyter-server", specifier = ">=2.0.0" }]
+
+[[package]]
 name = "hugr-kernel-dev"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "hugr-graphql-ide" },
     { name = "hugr-perspective-viewer" },
     { name = "jupyterlab" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "hugr-graphql-ide", editable = "extensions/jupyterlab" },
     { name = "hugr-perspective-viewer", specifier = ">=0.1.10" },
     { name = "jupyterlab", specifier = ">=4.0" },
 ]

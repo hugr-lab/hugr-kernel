@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hugr-lab/hugr-kernel/internal/connection"
+	"github.com/hugr-lab/hugr-kernel/internal/ide"
 	"github.com/hugr-lab/hugr-kernel/internal/meta"
 	"github.com/hugr-lab/hugr-kernel/internal/result"
 )
@@ -33,6 +34,12 @@ func (k *Kernel) handleShellMessage(ctx context.Context, msg *Message) {
 		k.handleCompleteRequest(msg)
 	case "inspect_request":
 		k.handleInspectRequest(msg)
+	case "comm_open":
+		k.handleCommOpen(ctx, msg)
+	case "comm_msg":
+		k.handleCommMsg(ctx, msg)
+	case "comm_close":
+		k.handleCommClose(msg)
 	default:
 		log.Printf("unhandled shell message type: %s", msg.Header.MsgType)
 	}
@@ -112,6 +119,7 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 
 		// If there's a GraphQL body after meta commands, execute it
 		if graphqlBody != "" {
+			k.publishDiagnostics(ctx, msg, graphqlBody)
 			k.executeGraphQL(ctx, msg, execCount, graphqlBody, useOverride, jsonMode)
 			return
 		}
@@ -119,6 +127,9 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 		k.sendExecuteOK(msg, execCount)
 		return
 	}
+
+	// Publish diagnostics before execution
+	k.publishDiagnostics(ctx, msg, code)
 
 	// Plain GraphQL query
 	k.executeGraphQL(ctx, msg, execCount, code, "", false)
@@ -311,13 +322,46 @@ func (k *Kernel) handleIsCompleteRequest(msg *Message) {
 }
 
 func (k *Kernel) handleCompleteRequest(msg *Message) {
+	code, _ := msg.Content["code"].(string)
+	cursorPos := 0
+	if v, ok := msg.Content["cursor_pos"].(float64); ok {
+		cursorPos = int(v)
+	}
+
+	ctx := context.Background()
+	items, cursorStart, cursorEnd, err := k.ide.Complete(ctx, code, cursorPos)
+	if err != nil {
+		log.Printf("completion error: %v", err)
+	}
+
+	var matches []string
+	var richItems []any
+	for _, item := range items {
+		matches = append(matches, item.Label)
+		richItems = append(richItems, map[string]any{
+			"label":         item.Label,
+			"kind":          item.Kind,
+			"detail":        item.Detail,
+			"documentation": item.Documentation,
+			"insertText":    item.InsertText,
+		})
+	}
+	if matches == nil {
+		matches = []string{}
+	}
+
+	metadata := map[string]any{}
+	if len(richItems) > 0 {
+		metadata["_hugr_completions"] = richItems
+	}
+
 	reply := NewMessage(msg, "complete_reply")
 	reply.Content = map[string]any{
 		"status":       "ok",
-		"matches":      []string{},
-		"cursor_start": 0,
-		"cursor_end":   0,
-		"metadata":     map[string]any{},
+		"matches":      matches,
+		"cursor_start": cursorStart,
+		"cursor_end":   cursorEnd,
+		"metadata":     metadata,
 	}
 	if err := k.sendMessage(k.shellSocket, reply); err != nil {
 		log.Printf("send complete_reply error: %v", err)
@@ -325,15 +369,67 @@ func (k *Kernel) handleCompleteRequest(msg *Message) {
 }
 
 func (k *Kernel) handleInspectRequest(msg *Message) {
+	code, _ := msg.Content["code"].(string)
+	cursorPos := 0
+	if v, ok := msg.Content["cursor_pos"].(float64); ok {
+		cursorPos = int(v)
+	}
+
+	ctx := context.Background()
+	found, plain, markdown, err := k.ide.Hover(ctx, code, cursorPos)
+	if err != nil {
+		log.Printf("inspect error: %v", err)
+	}
+
+	data := map[string]any{}
+	if found {
+		data["text/plain"] = plain
+		data["text/markdown"] = markdown
+	}
+
 	reply := NewMessage(msg, "inspect_reply")
 	reply.Content = map[string]any{
 		"status":   "ok",
-		"found":    false,
-		"data":     map[string]any{},
+		"found":    found,
+		"data":     data,
 		"metadata": map[string]any{},
 	}
 	if err := k.sendMessage(k.shellSocket, reply); err != nil {
 		log.Printf("send inspect_reply error: %v", err)
+	}
+}
+
+func (k *Kernel) publishDiagnostics(ctx context.Context, msg *Message, code string) {
+	diagnostics := k.ide.Validate(ctx, code)
+	if diagnostics == nil {
+		diagnostics = []ide.Diagnostic{}
+	}
+
+	diagItems := make([]any, len(diagnostics))
+	for i, d := range diagnostics {
+		diagItems[i] = map[string]any{
+			"severity":    d.Severity,
+			"message":     d.Message,
+			"startLine":   d.StartLine,
+			"startColumn": d.StartColumn,
+			"endLine":     d.EndLine,
+			"endColumn":   d.EndColumn,
+			"code":        d.Code,
+		}
+	}
+
+	displayMsg := NewMessage(msg, "display_data")
+	displayMsg.Content = map[string]any{
+		"data": map[string]any{
+			"application/vnd.hugr.diagnostics+json": map[string]any{
+				"diagnostics": diagItems,
+			},
+		},
+		"metadata":  map[string]any{},
+		"transient": map[string]any{},
+	}
+	if err := k.sendIOPub(displayMsg); err != nil {
+		log.Printf("send diagnostics error: %v", err)
 	}
 }
 
