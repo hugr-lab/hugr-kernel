@@ -16,6 +16,13 @@ go.work.sum
 # Binary output
 /bin/
 /dist/
+/static/
+/hugr-kernel
+
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
 
 # IDE
 .idea/
@@ -23,6 +30,10 @@ go.work.sum
 *.swp
 *.swo
 *~
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
 
 # OS
 .DS_Store
