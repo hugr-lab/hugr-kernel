@@ -1,0 +1,11 @@
+[project]
+name = "hugr-kernel-dev"
+version = "0.1.0"
+description = "Development environment for Hugr GraphQL Jupyter Kernel"
+requires-python = ">=3.11"
+dependencies = [
+    "jupyterlab>=4.0",
+    "hugr-perspective-viewer>=0.1.9",
+]
+
+[tool.uv]

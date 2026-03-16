@@ -1,0 +1,9 @@
+{
+  "argv": ["hugr-kernel", "--connection-file", "{connection_file}"],
+  "display_name": "Hugr GraphQL",
+  "language": "graphql",
+  "metadata": {
+    "debugger": false
+  },
+  "env": {}
+}

@@ -2,41 +2,154 @@
 
 A Jupyter kernel for executing [Hugr](https://github.com/hugr-lab/hugr) GraphQL queries, built in Go.
 
-## Overview
-
-Hugr Kernel provides a Jupyter-compatible execution environment for Hugr GraphQL queries. It integrates Hugr with analytical notebook workflows across JupyterLab, JupyterHub, and VS Code Notebooks.
-
-### Features
+## Features
 
 - **GraphQL query execution** via the Hugr Go client
 - **Multiple connections** — manage named Hugr endpoints within a single session
-- **Authentication** — public, API key, bearer token, and OIDC browser flows
-- **Session variables** — inject variables into GraphQL execution
-- **Multipart results** — Arrow tables (Perspective viewer), JSON (tree viewer), errors, extensions
-- **Streaming** — large datasets streamed via Apache Arrow IPC, no full materialization
-- **Meta commands** — `:connect`, `:use`, `:auth`, `:status`, `:whoami`, `:setvars`, and more
+- **Authentication** — public, API key, bearer token, and OIDC
+- **Session variables** — inject variables into GraphQL queries
+- **Multipart results** — Arrow tables (Perspective viewer), JSON (tree viewer), errors
+- **Streaming** — large datasets streamed via Apache Arrow IPC
+- **Meta commands** — `:connect`, `:use`, `:auth`, `:status`, `:setvars`, and more
 
-### Architecture
+## Quick Install
 
-The kernel is a thin orchestration layer — it delegates query execution to the [Hugr Go client](https://github.com/hugr-lab/query-engine) and rendering to frontend extensions. It does not contain UI logic; it only emits viewer metadata.
-
-```
-Jupyter Cell → Meta Command Parser → Connection Resolver →
-Session Variable Injection → Hugr Go Client → Multipart Response →
-Part Materialization → Viewer Metadata → Frontend Rendering
+```bash
+curl -fsSL https://raw.githubusercontent.com/hugr-lab/hugr-kernel/main/install.sh | bash
 ```
 
-## Status
+Or install a specific version:
 
-Under development. See [HUGR_KERNEL_SPEC.md](HUGR_KERNEL_SPEC.md) for the full specification.
+```bash
+curl -fsSL https://raw.githubusercontent.com/hugr-lab/hugr-kernel/main/install.sh | bash -s v0.1.0
+```
+
+## Development Setup
+
+### Prerequisites
+
+- Go 1.23+
+- [uv](https://docs.astral.sh/uv/) — Python package manager
+
+### Build and install
+
+```bash
+# Clone the repository
+git clone https://github.com/hugr-lab/hugr-kernel.git
+cd hugr-kernel
+
+# Build and install kernel into Jupyter
+make build
+make install
+
+# Create Python environment with JupyterLab and the result viewer extension
+uv sync
+uv pip install hugr-perspective-viewer
+
+# Launch JupyterLab
+uv run jupyter lab
+```
+
+### Overriding the JupyterLab extension from source
+
+If you are developing the [Perspective viewer extension](https://github.com/hugr-lab/duckdb-kernel/tree/main/extensions/jupyterlab) and want to use a local build instead of the PyPI version:
+
+```bash
+# Build the extension from duckdb-kernel source
+cd ../duckdb-kernel/extensions/jupyterlab
+jlpm install && jlpm build:prod
+
+# Back in hugr-kernel, overwrite the installed extension
+cd ../../hugr-kernel
+EXT_DIR=$(find .venv -path "*/labextensions/@hugr-lab/perspective-viewer" -type d)
+rm -rf "$EXT_DIR/static"
+cp -r ../duckdb-kernel/extensions/jupyterlab/hugr_perspective/labextension/static "$EXT_DIR/static"
+cp ../duckdb-kernel/extensions/jupyterlab/hugr_perspective/labextension/package.json "$EXT_DIR/package.json"
+```
+
+### VS Code
+
+Install the [HUGR Result Viewer](https://marketplace.visualstudio.com/items?itemName=hugr-lab.hugr-result-renderer) extension from the VS Code Marketplace, or build from source:
+
+```bash
+cd ../duckdb-kernel/extensions/vscode
+npm install && npm run build
+npx @vscode/vsce package --no-dependencies
+code --install-extension hugr-result-renderer-*.vsix
+```
+
+## Usage
+
+### Connecting to a Hugr instance
+
+```
+:connect local http://localhost:8080/graphql
+```
+
+### Running queries
+
+```graphql
+{
+  core {
+    data_sources {
+      name
+      type
+    }
+  }
+}
+```
+
+### Meta commands
+
+| Command | Description |
+|---------|-------------|
+| `:connect <name> <url>` | Add a named connection |
+| `:use <name>` | Set default connection |
+| `:connections` | List all connections |
+| `:auth <mode>` | Set auth mode (public, apikey, bearer, oidc) |
+| `:key <api-key>` | Set API key for current connection |
+| `:token <bearer-token>` | Set bearer token for current connection |
+| `:setvars` | Set session variables (JSON on next lines) |
+| `:showvars` | Show current session variables |
+| `:clearvars` | Clear all session variables |
+| `:json` | Output results as JSON instead of tables |
+| `:status` | Show kernel status |
+| `:whoami` | Show current connection and auth info |
+
+### Per-query connection override
+
+```
+:use remote
+{
+  core { data_sources { name } }
+}
+```
+
+## Architecture
+
+The kernel is a thin orchestration layer — it delegates query execution to the [Hugr Go client](https://github.com/hugr-lab/query-engine) and rendering to frontend extensions.
+
+```
+cmd/hugr-kernel/main.go           # Entry point, signal handling
+internal/kernel/                   # ZMQ sockets, message protocol, handlers
+internal/connection/               # Connection management, Hugr client wrapper
+internal/session/                  # Session variables, execution counter
+internal/meta/                     # Meta command parser and registry
+internal/result/                   # Multipart response → viewer metadata
+internal/renderer/                 # ASCII table fallback
+```
+
+## CI/CD
+
+- **CI**: build, vet, test on every push and PR
+- **Release**: tag `v*` triggers cross-compilation for linux/amd64, linux/arm64, darwin/arm64, windows/amd64 and creates a GitHub Release
 
 ## Related Projects
 
 - [Hugr](https://github.com/hugr-lab/hugr) — core Hugr platform
 - [Query Engine & Go Client](https://github.com/hugr-lab/query-engine) — Hugr query engine
-- [Python Client](https://github.com/hugr-lab/hugr-client) — Hugr Python client
 - [DuckDB Kernel](https://github.com/hugr-lab/duckdb-kernel) — reference Go Jupyter kernel with Perspective viewer
-- [Documentation](https://hugr-lab.github.io/) — Hugr documentation
+- [Documentation](https://hugr-lab.github.io/) — Hugr docs
 
 ## License
 
