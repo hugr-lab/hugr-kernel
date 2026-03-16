@@ -60,8 +60,9 @@ func NewArrowServer(sp *result.Spool) (*ArrowServer, error) {
 		}
 	}
 
+	// Wrap all handlers with CORS (required for VS Code webview)
 	as.server = &http.Server{
-		Handler:      mux,
+		Handler:      addCORS(mux),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 5 * time.Minute,
 		IdleTimeout:  60 * time.Second,
@@ -237,8 +238,15 @@ func (as *ArrowServer) streamRawFile(w http.ResponseWriter, path string) {
 }
 
 func addCORS(h http.Handler) http.Handler {
+	origin := corsOrigin()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", corsOrigin())
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		h.ServeHTTP(w, r)
 	})
 }

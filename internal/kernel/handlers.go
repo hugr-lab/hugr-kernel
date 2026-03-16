@@ -413,7 +413,6 @@ func (k *Kernel) handleInspectRequest(ctx context.Context, msg *Message) {
 		k.sendMessage(k.shellSocket, reply)
 		return
 	}
-
 	reply.Content = map[string]any{
 		"status": "ok",
 		"found":  true,

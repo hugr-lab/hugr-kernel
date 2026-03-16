@@ -2,30 +2,32 @@
   "name": "hugr-graphql-ide",
   "displayName": "Hugr GraphQL IDE",
   "version": "0.1.0",
-  "description": "VS Code extension for Hugr GraphQL IDE",
+  "description": "GraphQL IDE for Hugr — connections, completion, hover, diagnostics in VS Code notebooks",
   "publisher": "hugr-lab",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hugr-lab/hugr-kernel",
+    "directory": "extensions/vscode"
+  },
   "engines": {
     "vscode": "^1.80.0"
   },
   "categories": ["Programming Languages", "Notebooks"],
   "activationEvents": [
-    "onLanguage:graphql",
-    "onNotebook:jupyter-notebook"
+    "onNotebook:jupyter-notebook",
+    "onView:hugr.connections"
   ],
   "main": "./out/extension.js",
   "scripts": {
-    "build": "tsc",
-    "watch": "tsc -w",
-    "clean": "rimraf out"
-  },
-  "dependencies": {
-    "prettier": "^3.0.0"
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "package": "npx @vscode/vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/vscode": "^1.80.0",
-    "typescript": "^5.0.0",
-    "rimraf": "^5.0.0"
+    "esbuild": "^0.27.4",
+    "typescript": "~5.8.0"
   },
   "contributes": {
     "viewsContainers": {
@@ -40,25 +42,114 @@
     "views": {
       "hugr-explorer": [
         {
-          "id": "hugr-connections",
+          "id": "hugr.connections",
           "name": "Connections"
         },
         {
-          "id": "hugr-catalog",
+          "id": "hugr.catalog",
           "name": "Catalog Explorer"
         },
         {
-          "id": "hugr-schema",
+          "id": "hugr.schema",
           "name": "Schema Explorer"
         }
       ]
     },
-    "languages": [
+    "commands": [
       {
-        "id": "graphql",
-        "aliases": ["GraphQL"],
-        "extensions": [".graphql", ".gql"]
+        "command": "hugr.addConnection",
+        "title": "Add Connection",
+        "icon": "$(add)",
+        "category": "Hugr"
+      },
+      {
+        "command": "hugr.removeConnection",
+        "title": "Remove Connection",
+        "icon": "$(trash)",
+        "category": "Hugr"
+      },
+      {
+        "command": "hugr.setDefaultConnection",
+        "title": "Set as Default",
+        "icon": "$(star-full)",
+        "category": "Hugr"
+      },
+      {
+        "command": "hugr.testConnection",
+        "title": "Test Connection",
+        "icon": "$(debug-start)",
+        "category": "Hugr"
+      },
+      {
+        "command": "hugr.editConnection",
+        "title": "Edit Connection",
+        "icon": "$(edit)",
+        "category": "Hugr"
+      },
+      {
+        "command": "hugr.refreshConnections",
+        "title": "Refresh Connections",
+        "icon": "$(refresh)",
+        "category": "Hugr"
+      },
+      {
+        "command": "hugr.refreshCatalog",
+        "title": "Refresh Catalog",
+        "icon": "$(refresh)",
+        "category": "Hugr"
+      },
+      {
+        "command": "hugr.refreshSchema",
+        "title": "Refresh Schema",
+        "icon": "$(refresh)",
+        "category": "Hugr"
       }
-    ]
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "hugr.addConnection",
+          "when": "view == hugr.connections",
+          "group": "navigation"
+        },
+        {
+          "command": "hugr.refreshConnections",
+          "when": "view == hugr.connections",
+          "group": "navigation"
+        },
+        {
+          "command": "hugr.refreshCatalog",
+          "when": "view == hugr.catalog",
+          "group": "navigation"
+        },
+        {
+          "command": "hugr.refreshSchema",
+          "when": "view == hugr.schema",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "hugr.testConnection",
+          "when": "view == hugr.connections",
+          "group": "inline@1"
+        },
+        {
+          "command": "hugr.setDefaultConnection",
+          "when": "view == hugr.connections && viewItem == connection",
+          "group": "inline@2"
+        },
+        {
+          "command": "hugr.editConnection",
+          "when": "view == hugr.connections",
+          "group": "1_edit@1"
+        },
+        {
+          "command": "hugr.removeConnection",
+          "when": "view == hugr.connections",
+          "group": "1_edit@2"
+        }
+      ]
+    }
   }
 }

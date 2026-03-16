@@ -115,17 +115,24 @@ func resolveInSelectionSet(ss ast.SelectionSet, code string, cursorPos int, pref
 		}
 	}
 
-	// Check if cursor is inside this field's arguments
+	// Check if cursor is inside this field's arguments (either parsed or empty parens)
 	if len(field.Arguments) > 0 {
 		if ctx := resolveInFieldArgs(field, code, cursorPos, prefix, opType, parentPath); ctx != nil {
 			return ctx
 		}
+	} else if ctx := resolveInEmptyArgs(field, code, cursorPos, prefix, opType, parentPath); ctx != nil {
+		return ctx
 	}
 
 	// Check if field has a selection set and cursor is inside it
 	if len(field.SelectionSet) > 0 {
-		newPath := append(copySlice(parentPath), field.Name)
-		return resolveInSelectionSet(field.SelectionSet, code, cursorPos, prefix, opType, newPath)
+		// Only recurse if cursor is past the field name (and any arguments).
+		// If cursor is still on the field name, stay in parent context for hover.
+		fieldEnd := fieldNameEnd(field, code)
+		if cursorPos > fieldEnd {
+			newPath := append(copySlice(parentPath), field.Name)
+			return resolveInSelectionSet(field.SelectionSet, code, cursorPos, prefix, opType, newPath)
+		}
 	}
 
 	// Field has no selection set — check if there's a { in the text after this field
@@ -147,6 +154,42 @@ func resolveInSelectionSet(ss ast.SelectionSet, code string, cursorPos int, pref
 		FieldPath:     copySlice(parentPath),
 		Prefix:        prefix,
 		Depth:         len(parentPath) + 1,
+		OperationType: opType,
+	}
+}
+
+// resolveInEmptyArgs handles the case where cursor is inside parentheses but
+// the parser didn't create any Argument nodes (empty parens or incomplete input).
+func resolveInEmptyArgs(field *ast.Field, code string, cursorPos int, prefix string, opType string, path []string) *CursorContext {
+	// Scan from after field name to find '('
+	parenPos := -1
+	for i := field.Position.Start + len(field.Name); i < len(code) && i < cursorPos+1; i++ {
+		if code[i] == '(' {
+			parenPos = i
+			break
+		}
+		// Stop at '{' — we've passed into selection set
+		if code[i] == '{' {
+			return nil
+		}
+	}
+	if parenPos < 0 || cursorPos <= parenPos {
+		return nil
+	}
+
+	// Find matching close paren
+	closeParen := findMatchingCloseParen(code, parenPos)
+	if closeParen >= 0 && cursorPos > closeParen {
+		return nil // cursor is after the arguments
+	}
+
+	// Cursor is between ( and ) with no parsed args — argument name context
+	return &CursorContext{
+		Kind:          ContextArgument,
+		FieldPath:     copySlice(path),
+		Prefix:        prefix,
+		ParentField:   field.Name,
+		Depth:         len(path) + 1,
 		OperationType: opType,
 	}
 }
@@ -195,6 +238,22 @@ func resolveInFieldArgs(field *ast.Field, code string, cursorPos int, prefix str
 	}
 
 	arg := lastArgForCursor
+
+	// Check if cursor is on the argument name itself (before the colon).
+	// If so, this is an argument name context (for hover/completion of arg names).
+	if arg.Position != nil && cursorPos <= arg.Position.Start+len(arg.Name) {
+		// Cursor is within the arg name text
+		if !hasColonBetween(code, arg.Position.Start, cursorPos) {
+			return &CursorContext{
+				Kind:          ContextArgument,
+				FieldPath:     copySlice(path),
+				Prefix:        prefix,
+				ParentField:   field.Name,
+				Depth:         len(path) + 1,
+				OperationType: opType,
+			}
+		}
+	}
 
 	// If the arg has no value, it could be:
 	// 1. An arg name being typed (parser interpreted partial text as an arg with enum value)
@@ -287,14 +346,54 @@ func buildInputPath(val *ast.Value, cursorPos int) []string {
 		return nil
 	}
 
+	// Check if cursor is still on the child's name (before the colon).
+	// If so, don't include it in the path — the caller needs to look up
+	// this name in the current type.
+	if lastChild.Position != nil && cursorPos <= lastChild.Position.Start+len(lastChild.Name) {
+		return nil
+	}
+
 	// If this child has an ObjectValue, recurse
 	if lastChild.Value != nil && lastChild.Value.Kind == ast.ObjectValue {
 		sub := buildInputPath(lastChild.Value, cursorPos)
 		return append([]string{lastChild.Name}, sub...)
 	}
 
+	// If this child has a ListValue, find the list element containing cursor
+	if lastChild.Value != nil && lastChild.Value.Kind == ast.ListValue {
+		sub := buildInputPathInList(lastChild.Value, cursorPos)
+		return append([]string{lastChild.Name}, sub...)
+	}
+
 	// The child is a leaf or partial — don't include it in the path
 	// (it's either the prefix being typed or a completed value)
+	return nil
+}
+
+// buildInputPathInList walks through list elements to find the one containing cursor,
+// then recurses into it as an ObjectValue.
+func buildInputPathInList(listVal *ast.Value, cursorPos int) []string {
+	if listVal == nil || len(listVal.Children) == 0 {
+		return nil
+	}
+
+	// List children are unnamed; find the one closest to cursor
+	var bestChild *ast.ChildValue
+	for _, child := range listVal.Children {
+		if child.Value != nil && child.Value.Position != nil && child.Value.Position.Start <= cursorPos {
+			bestChild = child
+		}
+	}
+
+	if bestChild == nil || bestChild.Value == nil {
+		return nil
+	}
+
+	// If it's an ObjectValue, recurse into it
+	if bestChild.Value.Kind == ast.ObjectValue {
+		return buildInputPath(bestChild.Value, cursorPos)
+	}
+
 	return nil
 }
 
@@ -371,6 +470,35 @@ func hasOpenBraceAfterField(code string, field *ast.Field, cursorPos int) bool {
 		}
 	}
 	return false
+}
+
+// fieldNameEnd returns the position just after the field name and any arguments.
+// For `data_sources(filter: {...})` it returns the position after `)`.
+// For `name` it returns the position after the name.
+func fieldNameEnd(field *ast.Field, code string) int {
+	end := field.Position.Start + len(field.Name)
+	// Look for '(' after field name — either parsed args or empty parens
+	for i := end; i < len(code); i++ {
+		ch := code[i]
+		if ch == '(' {
+			cp := findMatchingCloseParen(code, i)
+			if cp >= 0 {
+				return cp + 1
+			}
+			return i // unclosed paren
+		}
+		if ch == '{' || ch == '}' || ch == '\n' {
+			break // hit selection set or line end before any parens
+		}
+		if !isWhitespaceByte(ch) {
+			break
+		}
+	}
+	return end
+}
+
+func isWhitespaceByte(ch byte) bool {
+	return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n'
 }
 
 func hasColonBetween(code string, start, end int) bool {

@@ -171,6 +171,7 @@ func loadConnectionsFromFile(cm *connection.Manager) {
 	}
 
 	var cfg struct {
+		Default     string `json:"default"`
 		Connections []struct {
 			Name string `json:"name"`
 			URL  string `json:"url"`
@@ -187,6 +188,13 @@ func loadConnectionsFromFile(cm *connection.Manager) {
 			if _, err := cm.Get(c.Name); err != nil {
 				cm.Add(c.Name, c.URL)
 			}
+		}
+	}
+
+	// Set default connection if specified in config
+	if cfg.Default != "" {
+		if err := cm.SetDefault(cfg.Default); err == nil {
+			log.Printf("Default connection set to %q from config", cfg.Default)
 		}
 	}
 	log.Printf("Loaded %d connections from %s", len(cfg.Connections), configPath)
