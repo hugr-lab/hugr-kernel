@@ -126,11 +126,6 @@ func (h *Handler) HandleResponse(resp *types.Response, queryID string, queryTime
 		textParts = append(textParts, fmt.Sprintf("[extensions]\n%s", string(data)))
 	}
 
-	log.Printf("HandleResponse: %d parts generated", len(parts))
-	for i, p := range parts {
-		log.Printf("  part[%d]: id=%s type=%s title=%s arrow_url=%s rows=%d", i, p.ID, p.Type, p.Title, p.ArrowURL, p.Rows)
-	}
-
 	if len(parts) == 0 {
 		return nil, "No results.", nil
 	}
@@ -167,8 +162,6 @@ func (h *Handler) walkData(prefix string, data map[string]any, queryID string, p
 		path := prefix + "." + key
 		// Title = path relative to "data." prefix
 		title := strings.TrimPrefix(path, "data.")
-		log.Printf("walkData: path=%s type=%T", path, val)
-
 		switch v := val.(type) {
 		case types.ArrowTable:
 			partID := fmt.Sprintf("%s_%d", queryID, *partIndex)
@@ -184,7 +177,9 @@ func (h *Handler) walkData(prefix string, data map[string]any, queryID string, p
 		case *types.JsonValue:
 			jsonStr := string(*v)
 			var parsed any
-			json.Unmarshal([]byte(jsonStr), &parsed)
+			if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
+				parsed = jsonStr
+			}
 			*parts = append(*parts, PartDef{
 				ID:    path,
 				Type:  "json",

@@ -11,10 +11,19 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/hugr-lab/hugr-kernel/internal/result"
 )
+
+// corsOrigin returns the CORS origin from HUGR_KERNEL_CORS_ORIGIN env var, defaulting to "*".
+func corsOrigin() string {
+	if v := os.Getenv("HUGR_KERNEL_CORS_ORIGIN"); v != "" {
+		return v
+	}
+	return "*"
+}
 
 const maxArrowRows = 5_000_000
 
@@ -51,7 +60,12 @@ func NewArrowServer(sp *result.Spool) (*ArrowServer, error) {
 		}
 	}
 
-	as.server = &http.Server{Handler: mux}
+	as.server = &http.Server{
+		Handler:      mux,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 5 * time.Minute,
+		IdleTimeout:  60 * time.Second,
+	}
 
 	go func() {
 		if err := as.server.Serve(ln); err != nil && err != http.ErrServerClosed {
@@ -107,7 +121,7 @@ func (as *ArrowServer) handleArrow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/vnd.apache.arrow.stream")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Origin", corsOrigin())
 	as.streamRawFile(w, path)
 }
 
@@ -138,7 +152,7 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 	defer reader.Release()
 
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Origin", corsOrigin())
 
 	flusher, canFlush := w.(http.Flusher)
 	schema := reader.Schema()
@@ -224,7 +238,7 @@ func (as *ArrowServer) streamRawFile(w http.ResponseWriter, path string) {
 
 func addCORS(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Origin", corsOrigin())
 		h.ServeHTTP(w, r)
 	})
 }

@@ -3,6 +3,7 @@ package connection
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/hugr-lab/query-engine/client"
 	"github.com/hugr-lab/query-engine/types"
@@ -23,51 +24,69 @@ type Connection struct {
 	Name     string
 	URL      string
 	AuthMode AuthMode
-	Client   *client.Client
-	Options  []client.Option
+
+	mu      sync.Mutex
+	client  *client.Client
+	options []client.Option
 }
 
 // NewConnection creates a new connection with the given name and URL.
 func NewConnection(name, url string) *Connection {
-	c := &Connection{
+	return &Connection{
 		Name:     name,
 		URL:      url,
 		AuthMode: AuthPublic,
+		client:   client.NewClient(url),
 	}
-	c.Client = client.NewClient(url)
-	return c
 }
 
 // Query executes a GraphQL query with the given variables.
 func (c *Connection) Query(ctx context.Context, query string, vars map[string]any) (*types.Response, error) {
-	if c.Client == nil {
+	c.mu.Lock()
+	cl := c.client
+	c.mu.Unlock()
+	if cl == nil {
 		return nil, fmt.Errorf("connection %q not initialized", c.Name)
 	}
-	return c.Client.Query(ctx, query, vars)
+	return cl.Query(ctx, query, vars)
 }
 
-// recreateClient rebuilds the client with current options.
+// recreateClient rebuilds the client with current options. Must be called with mu held.
 func (c *Connection) recreateClient() {
-	c.Client = client.NewClient(c.URL, c.Options...)
+	c.client = client.NewClient(c.URL, c.options...)
 }
 
 // SetAPIKey sets the API key auth mode and recreates the client.
 func (c *Connection) SetAPIKey(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.AuthMode = AuthAPIKey
-	c.Options = []client.Option{client.WithApiKey(key)}
+	c.options = []client.Option{client.WithApiKey(key)}
 	c.recreateClient()
 }
 
 // SetBearerToken sets the bearer auth mode and recreates the client.
 func (c *Connection) SetBearerToken(token string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.AuthMode = AuthBearer
-	c.Options = []client.Option{client.WithToken(token)}
+	c.options = []client.Option{client.WithToken(token)}
 	c.recreateClient()
+}
+
+// SetAuthMode sets the authentication mode without recreating the client.
+// Used when mode is set first, then credentials are provided separately.
+func (c *Connection) SetAuthMode(mode AuthMode) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.AuthMode = mode
 }
 
 // SetPublic clears auth and recreates the client.
 func (c *Connection) SetPublic() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.AuthMode = AuthPublic
-	c.Options = nil
+	c.options = nil
 	c.recreateClient()
 }

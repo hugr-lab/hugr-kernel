@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 
 	zmq "github.com/go-zeromq/zmq4"
 	"github.com/hugr-lab/hugr-kernel/internal/connection"
@@ -43,6 +44,7 @@ type Kernel struct {
 	shellSocket   zmq.Socket
 	controlSocket zmq.Socket
 	iopubSocket   zmq.Socket
+	iopubMu       sync.Mutex // protects concurrent writes to iopubSocket
 	stdinSocket   zmq.Socket
 	hbSocket      zmq.Socket
 
@@ -212,10 +214,17 @@ func (k *Kernel) sendMessage(socket zmq.Socket, msg *Message) error {
 	return socket.Send(zmqMsg)
 }
 
+// sendIOPub sends a message on the iopub socket with mutex protection.
+func (k *Kernel) sendIOPub(msg *Message) error {
+	k.iopubMu.Lock()
+	defer k.iopubMu.Unlock()
+	return k.sendMessage(k.iopubSocket, msg)
+}
+
 func (k *Kernel) publishStatus(parent *Message, status string) {
 	msg := NewMessage(parent, "status")
 	msg.Content["execution_state"] = status
-	if err := k.sendMessage(k.iopubSocket, msg); err != nil {
+	if err := k.sendIOPub(msg); err != nil {
 		log.Printf("publish status error: %v", err)
 	}
 }

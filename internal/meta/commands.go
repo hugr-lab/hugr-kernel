@@ -96,10 +96,20 @@ func connectionsCommand(cm *connection.Manager) CommandFunc {
 			rows[i] = []string{c.Name, c.URL, string(c.AuthMode), def}
 		}
 
+		// Build DTO for JSON output (avoid serializing internal client state)
+		connList := make([]map[string]any, len(conns))
+		for i, c := range conns {
+			connList[i] = map[string]any{
+				"name": c.Name,
+				"url":  c.URL,
+				"auth": string(c.AuthMode),
+			}
+		}
+
 		return &CommandResult{
 			Text: renderer.RenderTable(columns, rows),
 			JSON: map[string]any{
-				"connections": conns,
+				"connections": connList,
 				"default":     defaultName,
 			},
 		}, nil
@@ -122,7 +132,7 @@ func authCommand(cm *connection.Manager) CommandFunc {
 		case connection.AuthPublic:
 			conn.SetPublic()
 		case connection.AuthAPIKey, connection.AuthBearer, connection.AuthOIDC:
-			conn.AuthMode = connection.AuthMode(mode)
+			conn.SetAuthMode(connection.AuthMode(mode))
 		default:
 			return nil, fmt.Errorf("unknown auth mode: %s. Use: public, apikey, bearer, oidc", mode)
 		}

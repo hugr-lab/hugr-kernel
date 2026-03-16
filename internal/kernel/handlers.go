@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/hugr-lab/hugr-kernel/internal/connection"
 	"github.com/hugr-lab/hugr-kernel/internal/meta"
-	"github.com/hugr-lab/hugr-kernel/internal/renderer"
 	"github.com/hugr-lab/hugr-kernel/internal/result"
 )
 
@@ -75,7 +74,7 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 		"code":            code,
 		"execution_count": execCount,
 	}
-	if err := k.sendMessage(k.iopubSocket, inputMsg); err != nil {
+	if err := k.sendIOPub( inputMsg); err != nil {
 		log.Printf("send execute_input error: %v", err)
 	}
 
@@ -161,13 +160,17 @@ func (k *Kernel) executeGraphQL(ctx context.Context, msg *Message, execCount int
 
 	// JSON mode: marshal the response and send through our custom MIME renderer
 	if jsonMode {
-		var jsonData any
-		jsonBytes, err := json.MarshalIndent(resp, "", "  ")
+		jsonBytes, err := json.Marshal(resp)
 		if err != nil {
 			k.sendExecuteError(msg, execCount, fmt.Errorf("json marshal error: %w", err))
 			return
 		}
-		json.Unmarshal(jsonBytes, &jsonData)
+		var jsonData any
+		if err := json.Unmarshal(jsonBytes, &jsonData); err != nil {
+			k.sendExecuteError(msg, execCount, fmt.Errorf("json unmarshal error: %w", err))
+			return
+		}
+		prettyBytes, _ := json.MarshalIndent(jsonData, "", "  ")
 
 		metadata := map[string]any{
 			"query_time_ms": queryTimeMs,
@@ -184,13 +187,13 @@ func (k *Kernel) executeGraphQL(ctx context.Context, msg *Message, execCount int
 		displayMsg := NewMessage(msg, "display_data")
 		displayMsg.Content = map[string]any{
 			"data": map[string]any{
-				"text/plain":                          string(jsonBytes),
+				"text/plain":                          string(prettyBytes),
 				"application/vnd.hugr.result+json": metadata,
 			},
 			"metadata":  map[string]any{},
 			"transient": map[string]any{},
 		}
-		if err := k.sendMessage(k.iopubSocket, displayMsg); err != nil {
+		if err := k.sendIOPub( displayMsg); err != nil {
 			log.Printf("send display_data error: %v", err)
 		}
 		k.sendExecuteOK(msg, execCount)
@@ -206,9 +209,6 @@ func (k *Kernel) executeGraphQL(ctx context.Context, msg *Message, execCount int
 	}
 
 	if metadata != nil {
-		metaJSON, _ := json.Marshal(metadata)
-		log.Printf("viewer metadata JSON: %s", string(metaJSON))
-
 		data := map[string]any{
 			"text/plain": textFallback,
 		}
@@ -222,7 +222,7 @@ func (k *Kernel) executeGraphQL(ctx context.Context, msg *Message, execCount int
 			"metadata":  map[string]any{},
 			"transient": map[string]any{},
 		}
-		if err := k.sendMessage(k.iopubSocket, displayMsg); err != nil {
+		if err := k.sendIOPub( displayMsg); err != nil {
 			log.Printf("send display_data error: %v", err)
 		}
 	} else if textFallback != "" {
@@ -232,7 +232,7 @@ func (k *Kernel) executeGraphQL(ctx context.Context, msg *Message, execCount int
 			"metadata":  map[string]any{},
 			"transient": map[string]any{},
 		}
-		if err := k.sendMessage(k.iopubSocket, displayMsg); err != nil {
+		if err := k.sendIOPub( displayMsg); err != nil {
 			log.Printf("send display_data error: %v", err)
 		}
 	}
@@ -260,7 +260,7 @@ func (k *Kernel) sendDisplayData(msg *Message, r *meta.CommandResult) {
 		"metadata":  map[string]any{},
 		"transient": map[string]any{},
 	}
-	if err := k.sendMessage(k.iopubSocket, displayMsg); err != nil {
+	if err := k.sendIOPub( displayMsg); err != nil {
 		log.Printf("send display_data error: %v", err)
 	}
 }
@@ -283,7 +283,7 @@ func (k *Kernel) sendExecuteError(msg *Message, execCount int, execErr error) {
 		"evalue":    execErr.Error(),
 		"traceback": []string{execErr.Error()},
 	}
-	if err := k.sendMessage(k.iopubSocket, errMsg); err != nil {
+	if err := k.sendIOPub( errMsg); err != nil {
 		log.Printf("send error error: %v", err)
 	}
 
@@ -352,13 +352,3 @@ func (k *Kernel) handleShutdownRequest(msg *Message) {
 	k.cancel()
 }
 
-// SetConnectionOverride allows per-query connection override from :use command.
-func (k *Kernel) SetConnectionOverride(name string) {
-	// This is used by the :use meta command for per-query overrides
-	// The actual implementation connects via the connection manager
-}
-
-// renderTextFallback creates a text/plain representation using ASCII table.
-func renderTextFallback(columns []string, rows [][]string) string {
-	return renderer.RenderTable(columns, rows)
-}

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -42,7 +43,7 @@ func NewMessage(parent *Message, msgType string) *Message {
 			MsgID:    uuid.New().String(),
 			Session:  parent.Header.Session,
 			Username: parent.Header.Username,
-			Date:     "",
+			Date:     time.Now().UTC().Format(time.RFC3339),
 			MsgType:  msgType,
 			Version:  ProtocolVersion,
 		},
@@ -86,7 +87,7 @@ func (m *Message) Serialize(key []byte) ([][]byte, error) {
 
 	sig := Sign(key, header, parentHeader, metadata, content)
 
-	frames := make([][]byte, 0, len(m.Identities)+5)
+	frames := make([][]byte, 0, len(m.Identities)+6)
 	frames = append(frames, m.Identities...)
 	frames = append(frames, []byte(Delimiter))
 	frames = append(frames, []byte(sig))
