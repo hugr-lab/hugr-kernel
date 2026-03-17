@@ -269,16 +269,36 @@ export class ConnectionManagerWidget extends Widget {
   }
 
   private async _testConnectionByName(name: string): Promise<void> {
-    this._showAlert(`Testing "${name}"...`, '');
+    // Single modal — show "Testing..." then update with result
+    const overlay = document.createElement('div');
+    overlay.className = 'hugr-dlg-overlay';
+    overlay.innerHTML = `
+      <div class="hugr-dlg hugr-dlg-sm">
+        <div class="hugr-dlg-header">
+          <span>Test: ${name}</span>
+          <button class="hugr-dlg-close">&times;</button>
+        </div>
+        <div class="hugr-dlg-body"><span class="hugr-cm-info">Testing...</span></div>
+        <div class="hugr-dlg-footer">
+          <button class="hugr-dlg-btn hugr-dlg-btn-save">OK</button>
+        </div>
+      </div>
+    `;
+    const close = () => overlay.remove();
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.querySelector('.hugr-dlg-close')?.addEventListener('click', close);
+    overlay.querySelector('.hugr-dlg-btn-save')?.addEventListener('click', close);
+    document.body.appendChild(overlay);
+
+    const bodyEl = overlay.querySelector('.hugr-dlg-body') as HTMLElement;
     try {
       const resp = await fetch(`${BASE_URL}/connections/${name}/test`, makeRequest('POST'));
       const result = await resp.json();
-      const body = result.ok
-        ? `<span class="hugr-cm-ok">v${result.version} (${result.cluster_mode ? 'cluster' : 'standalone'})</span>`
+      bodyEl.innerHTML = result.ok
+        ? `<span class="hugr-cm-ok">v${result.version}</span>`
         : `<span class="hugr-cm-err">${result.error}</span>`;
-      this._showAlert(`Test: ${name}`, body);
     } catch {
-      this._showAlert(`Test: ${name}`, '<span class="hugr-cm-err">Connection failed</span>');
+      bodyEl.innerHTML = '<span class="hugr-cm-err">Connection failed</span>';
     }
   }
 

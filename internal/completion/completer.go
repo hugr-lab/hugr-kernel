@@ -2,10 +2,10 @@ package completion
 
 import (
 	"context"
-	"log"
 	"strings"
 
 	"github.com/hugr-lab/hugr-kernel/internal/connection"
+	"github.com/hugr-lab/hugr-kernel/internal/debug"
 	"github.com/hugr-lab/hugr-kernel/internal/schema"
 )
 
@@ -41,10 +41,10 @@ func NewCompleter(sc *schema.Client) *Completer {
 func (c *Completer) Complete(ctx context.Context, conn *connection.Connection, code string, cursorPos int, variableNames []string) *Result {
 	cctx := ResolveCursorContext(code, cursorPos)
 	if cctx == nil {
-		log.Printf("[completion] context is nil for pos=%d", cursorPos)
+		debug.Printf("[completion] context is nil for pos=%d", cursorPos)
 		return nil
 	}
-	log.Printf("[completion] pos=%d kind=%d path=%v prefix=%q parentField=%q argName=%q inputPath=%v op=%q",
+	debug.Printf("[completion] pos=%d kind=%d path=%v prefix=%q parentField=%q argName=%q inputPath=%v op=%q",
 		cursorPos, cctx.Kind, cctx.FieldPath, cctx.Prefix, cctx.ParentField, cctx.ArgumentName, cctx.InputPath, cctx.OperationType)
 
 	var items []Item
@@ -99,11 +99,11 @@ func (c *Completer) Complete(ctx context.Context, conn *connection.Connection, c
 func (c *Completer) completeFields(ctx context.Context, conn *connection.Connection, cctx *CursorContext) []Item {
 	ti, typeName, err := c.Schema.ResolveFieldPath(ctx, conn, cctx.FieldPath, cctx.OperationType)
 	if err != nil {
-		log.Printf("[completion] resolve path %v: %v", cctx.FieldPath, err)
+		debug.Printf("[completion] resolve path %v: %v", cctx.FieldPath, err)
 		return nil
 	}
 	if ti == nil {
-		log.Printf("[completion] type not found for path %v (last: %s)", cctx.FieldPath, typeName)
+		debug.Printf("[completion] type not found for path %v (last: %s)", cctx.FieldPath, typeName)
 		return nil
 	}
 

@@ -37,6 +37,8 @@ func (k *Kernel) handleShellMessage(ctx context.Context, msg *Message) {
 		k.handleHistoryRequest(msg)
 	case "comm_open", "comm_msg", "comm_close":
 		k.handleCommMessage(ctx, msg)
+	case "comm_info_request":
+		k.handleCommInfoRequest(msg)
 	default:
 		log.Printf("unhandled shell message type: %s", msg.Header.MsgType)
 	}
@@ -450,6 +452,17 @@ func (k *Kernel) handleHistoryRequest(msg *Message) {
 	}
 	if err := k.sendMessage(k.shellSocket, reply); err != nil {
 		log.Printf("send history_reply error: %v", err)
+	}
+}
+
+func (k *Kernel) handleCommInfoRequest(msg *Message) {
+	reply := NewMessage(msg, "comm_info_reply")
+	reply.Content = map[string]any{
+		"status": "ok",
+		"comms":  map[string]any{},
+	}
+	if err := k.sendMessage(k.shellSocket, reply); err != nil {
+		log.Printf("send comm_info_reply error: %v", err)
 	}
 }
 

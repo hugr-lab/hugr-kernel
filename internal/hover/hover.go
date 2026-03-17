@@ -4,11 +4,11 @@ package hover
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/hugr-lab/hugr-kernel/internal/completion"
 	"github.com/hugr-lab/hugr-kernel/internal/connection"
+	"github.com/hugr-lab/hugr-kernel/internal/debug"
 	"github.com/hugr-lab/hugr-kernel/internal/schema"
 )
 
@@ -41,7 +41,7 @@ func (ins *Inspector) Inspect(ctx context.Context, conn *connection.Connection, 
 	if cctx == nil {
 		return nil
 	}
-	log.Printf("[hover] token=%q pos=%d kind=%d path=%v parentField=%q argName=%q inputPath=%v",
+	debug.Printf("[hover] token=%q pos=%d kind=%d path=%v parentField=%q argName=%q inputPath=%v",
 		token, cursorPos, cctx.Kind, cctx.FieldPath, cctx.ParentField, cctx.ArgumentName, cctx.InputPath)
 
 	switch cctx.Kind {

@@ -5,11 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/hugr-lab/hugr-kernel/internal/connection"
+	"github.com/hugr-lab/hugr-kernel/internal/debug"
 )
 
 const (
@@ -181,7 +181,7 @@ func (c *Client) GetType(ctx context.Context, conn *connection.Connection, typeN
 
 	var ti TypeInfo
 	if err := resp.ScanData("__type", &ti); err != nil {
-		log.Printf("[schema] ScanData __type failed for %s: %v", typeName, err)
+		debug.Printf("[schema] ScanData __type failed for %s: %v", typeName, err)
 		return nil, nil
 	}
 
