@@ -7,9 +7,12 @@ import (
 	"sync"
 
 	zmq "github.com/go-zeromq/zmq4"
+	"github.com/hugr-lab/hugr-kernel/internal/completion"
 	"github.com/hugr-lab/hugr-kernel/internal/connection"
+	"github.com/hugr-lab/hugr-kernel/internal/hover"
 	"github.com/hugr-lab/hugr-kernel/internal/meta"
 	"github.com/hugr-lab/hugr-kernel/internal/result"
+	"github.com/hugr-lab/hugr-kernel/internal/schema"
 	"github.com/hugr-lab/hugr-kernel/internal/session"
 )
 
@@ -41,6 +44,11 @@ type Kernel struct {
 	metaReg     *meta.Registry
 	key         []byte
 
+	// IDE features
+	schemaClient *schema.Client
+	completer    *completion.Completer
+	inspector    *hover.Inspector
+
 	shellSocket   zmq.Socket
 	controlSocket zmq.Socket
 	iopubSocket   zmq.Socket
@@ -52,14 +60,17 @@ type Kernel struct {
 }
 
 // NewKernel creates a new kernel with the given connection info.
-func NewKernel(connInfo *ConnectionInfo, sess *session.Session, cm *connection.Manager, sp *result.Spool, reg *meta.Registry) *Kernel {
+func NewKernel(connInfo *ConnectionInfo, sess *session.Session, cm *connection.Manager, sp *result.Spool, reg *meta.Registry, sc *schema.Client) *Kernel {
 	return &Kernel{
-		connInfo:    connInfo,
-		session:     sess,
-		connManager: cm,
-		spool:       sp,
-		metaReg:     reg,
-		key:         []byte(connInfo.Key),
+		connInfo:     connInfo,
+		session:      sess,
+		connManager:  cm,
+		spool:        sp,
+		metaReg:      reg,
+		key:          []byte(connInfo.Key),
+		schemaClient: sc,
+		completer:    completion.NewCompleter(sc),
+		inspector:    hover.NewInspector(sc),
 	}
 }
 
@@ -199,8 +210,53 @@ func (k *Kernel) controlLoop(ctx context.Context) {
 			continue
 		}
 
-		if msg.Header.MsgType == "shutdown_request" {
+		switch msg.Header.MsgType {
+		case "shutdown_request":
 			k.handleShutdownRequest(msg)
+		case "interrupt_request":
+			// no-op for now
+			reply := NewMessage(msg, "interrupt_reply")
+			reply.Content = map[string]any{"status": "ok"}
+			if err := k.sendMessage(k.controlSocket, reply); err != nil {
+				log.Printf("send interrupt_reply error: %v", err)
+			}
+		case "kernel_info_request":
+			k.publishStatus(msg, "busy")
+			reply := NewMessage(msg, "kernel_info_reply")
+			content := map[string]any{
+				"protocol_version":       ProtocolVersion,
+				"implementation":         "hugr-kernel",
+				"implementation_version": KernelVersion,
+				"language_info": map[string]any{
+					"name":           "graphql",
+					"version":        "",
+					"mimetype":       "application/graphql",
+					"file_extension": ".graphql",
+				},
+				"banner": fmt.Sprintf("Hugr GraphQL Kernel v%s", KernelVersion),
+				"status": "ok",
+			}
+			if k.arrowServer != nil {
+				content["hugr_base_url"] = k.arrowServer.BaseURL()
+			}
+			reply.Content = content
+			if err := k.sendMessage(k.controlSocket, reply); err != nil {
+				log.Printf("send kernel_info_reply (control) error: %v", err)
+			}
+			k.publishStatus(msg, "idle")
+		case "comm_info_request":
+			k.publishStatus(msg, "busy")
+			reply := NewMessage(msg, "comm_info_reply")
+			reply.Content = map[string]any{
+				"status": "ok",
+				"comms":  map[string]any{},
+			}
+			if err := k.sendMessage(k.controlSocket, reply); err != nil {
+				log.Printf("send comm_info_reply (control) error: %v", err)
+			}
+			k.publishStatus(msg, "idle")
+		default:
+			log.Printf("unhandled control message type: %s", msg.Header.MsgType)
 		}
 	}
 }

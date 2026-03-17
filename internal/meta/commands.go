@@ -59,11 +59,16 @@ func connectCommand(cm *connection.Manager) CommandFunc {
 
 func useCommand(cm *connection.Manager) CommandFunc {
 	return func(ctx context.Context, cmd ParsedCommand) (*CommandResult, error) {
-		name := strings.TrimSpace(cmd.Args)
-		if name == "" {
-			return nil, fmt.Errorf("usage: :use <name>")
+		args := strings.TrimSpace(cmd.Args)
+		if args == "" {
+			return nil, fmt.Errorf("usage: :use <name> [default]")
 		}
-		if cmd.Body != "" {
+		parts := strings.Fields(args)
+		name := parts[0]
+		setDefault := len(parts) > 1 && strings.EqualFold(parts[1], "default")
+
+		if cmd.Body != "" && !setDefault {
+			// Per-query override: just validate the connection exists
 			if _, err := cm.Get(name); err != nil {
 				return nil, err
 			}

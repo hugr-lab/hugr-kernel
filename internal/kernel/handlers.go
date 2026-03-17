@@ -30,9 +30,15 @@ func (k *Kernel) handleShellMessage(ctx context.Context, msg *Message) {
 	case "is_complete_request":
 		k.handleIsCompleteRequest(msg)
 	case "complete_request":
-		k.handleCompleteRequest(msg)
+		k.handleCompleteRequest(ctx, msg)
 	case "inspect_request":
-		k.handleInspectRequest(msg)
+		k.handleInspectRequest(ctx, msg)
+	case "history_request":
+		k.handleHistoryRequest(msg)
+	case "comm_open", "comm_msg", "comm_close":
+		k.handleCommMessage(ctx, msg)
+	case "comm_info_request":
+		k.handleCommInfoRequest(msg)
 	default:
 		log.Printf("unhandled shell message type: %s", msg.Header.MsgType)
 	}
@@ -310,26 +316,112 @@ func (k *Kernel) handleIsCompleteRequest(msg *Message) {
 	}
 }
 
-func (k *Kernel) handleCompleteRequest(msg *Message) {
+func (k *Kernel) handleCompleteRequest(ctx context.Context, msg *Message) {
+	code, _ := msg.Content["code"].(string)
+	cursorPos := int(0)
+	if cp, ok := msg.Content["cursor_pos"].(float64); ok {
+		cursorPos = int(cp)
+	}
+
 	reply := NewMessage(msg, "complete_reply")
+
+	conn := k.connManager.GetDefault()
+	if conn == nil || k.completer == nil {
+		reply.Content = map[string]any{
+			"status": "ok", "matches": []string{},
+			"cursor_start": cursorPos, "cursor_end": cursorPos,
+			"metadata": map[string]any{},
+		}
+		k.sendMessage(k.shellSocket, reply)
+		return
+	}
+
+	completeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	// Collect session variable names for $-completion
+	var varNames []string
+	if vars := k.session.GetVariables(); len(vars) > 0 {
+		varNames = make([]string, 0, len(vars))
+		for name := range vars {
+			varNames = append(varNames, name)
+		}
+	}
+
+	result := k.completer.Complete(completeCtx, conn, code, cursorPos, varNames)
+	if result == nil || len(result.Items) == 0 {
+		reply.Content = map[string]any{
+			"status": "ok", "matches": []string{},
+			"cursor_start": cursorPos, "cursor_end": cursorPos,
+			"metadata": map[string]any{},
+		}
+		k.sendMessage(k.shellSocket, reply)
+		return
+	}
+
+	matches := make([]string, len(result.Items))
+	hugrCompletions := make([]map[string]any, len(result.Items))
+	for i, item := range result.Items {
+		matches[i] = item.Label
+		hugrCompletions[i] = map[string]any{
+			"label":      item.Label,
+			"kind":       item.Kind,
+			"detail":     item.Detail,
+			"documentation": item.Documentation,
+			"insertText": item.InsertText,
+		}
+	}
+
 	reply.Content = map[string]any{
 		"status":       "ok",
-		"matches":      []string{},
-		"cursor_start": 0,
-		"cursor_end":   0,
-		"metadata":     map[string]any{},
+		"matches":      matches,
+		"cursor_start": result.CursorStart,
+		"cursor_end":   result.CursorEnd,
+		"metadata": map[string]any{
+			"_hugr_completions": hugrCompletions,
+		},
 	}
 	if err := k.sendMessage(k.shellSocket, reply); err != nil {
 		log.Printf("send complete_reply error: %v", err)
 	}
 }
 
-func (k *Kernel) handleInspectRequest(msg *Message) {
+func (k *Kernel) handleInspectRequest(ctx context.Context, msg *Message) {
+	code, _ := msg.Content["code"].(string)
+	cursorPos := int(0)
+	if cp, ok := msg.Content["cursor_pos"].(float64); ok {
+		cursorPos = int(cp)
+	}
+
 	reply := NewMessage(msg, "inspect_reply")
+	notFound := map[string]any{
+		"status": "ok", "found": false,
+		"data": map[string]any{}, "metadata": map[string]any{},
+	}
+
+	conn := k.connManager.GetDefault()
+	if conn == nil || k.inspector == nil {
+		reply.Content = notFound
+		k.sendMessage(k.shellSocket, reply)
+		return
+	}
+
+	inspectCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	result := k.inspector.Inspect(inspectCtx, conn, code, cursorPos)
+	if result == nil || !result.Found {
+		reply.Content = notFound
+		k.sendMessage(k.shellSocket, reply)
+		return
+	}
 	reply.Content = map[string]any{
-		"status":   "ok",
-		"found":    false,
-		"data":     map[string]any{},
+		"status": "ok",
+		"found":  true,
+		"data": map[string]any{
+			"text/plain":    result.Plain,
+			"text/markdown": result.Markdown,
+		},
 		"metadata": map[string]any{},
 	}
 	if err := k.sendMessage(k.shellSocket, reply); err != nil {
@@ -350,5 +442,32 @@ func (k *Kernel) handleShutdownRequest(msg *Message) {
 	}
 
 	k.cancel()
+}
+
+func (k *Kernel) handleHistoryRequest(msg *Message) {
+	reply := NewMessage(msg, "history_reply")
+	reply.Content = map[string]any{
+		"status":  "ok",
+		"history": []any{},
+	}
+	if err := k.sendMessage(k.shellSocket, reply); err != nil {
+		log.Printf("send history_reply error: %v", err)
+	}
+}
+
+func (k *Kernel) handleCommInfoRequest(msg *Message) {
+	reply := NewMessage(msg, "comm_info_reply")
+	reply.Content = map[string]any{
+		"status": "ok",
+		"comms":  map[string]any{},
+	}
+	if err := k.sendMessage(k.shellSocket, reply); err != nil {
+		log.Printf("send comm_info_reply error: %v", err)
+	}
+}
+
+func (k *Kernel) handleCommMessage(ctx context.Context, msg *Message) {
+	// Comm messages are used by the explorer extension.
+	// TODO: implement comm protocol for explorer
 }
 

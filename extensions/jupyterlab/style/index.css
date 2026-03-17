@@ -1,0 +1,457 @@
+/* Hugr GraphQL IDE — JupyterLab Extension Styles */
+
+/* ── Connection Manager ── */
+.hugr-connection-manager {
+  padding: 0;
+  overflow-y: auto;
+  font-size: var(--jp-ui-font-size1);
+  color: var(--jp-ui-font-color0);
+}
+
+.hugr-cm-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.hugr-cm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--jp-border-color2);
+}
+
+.hugr-cm-title {
+  font-size: var(--jp-ui-font-size2);
+  font-weight: 600;
+}
+
+/* ── Icon buttons (used everywhere) ── */
+.hugr-cm-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--jp-ui-font-color1);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.hugr-cm-icon-btn:hover {
+  background: var(--jp-layout-color3);
+  color: var(--jp-ui-font-color0);
+}
+
+.hugr-cm-icon-btn svg {
+  pointer-events: none;
+}
+
+/* ── Connection list (cards) ── */
+.hugr-cm-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.hugr-cm-card {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--jp-border-color2);
+}
+
+.hugr-cm-card:hover {
+  background: var(--jp-layout-color2);
+}
+
+.hugr-cm-card-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.hugr-cm-card-name {
+  font-weight: 500;
+  font-size: var(--jp-ui-font-size1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.hugr-cm-lock {
+  font-size: 11px;
+  margin-right: 2px;
+}
+
+.hugr-cm-card-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.hugr-cm-card-default {
+  border-left: 3px solid var(--jp-brand-color1);
+  padding-left: 9px;
+}
+
+.hugr-cm-card-default .hugr-cm-card-name {
+  font-weight: 600;
+}
+
+.hugr-cm-badge-default {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--jp-brand-color1);
+  background: var(--jp-brand-color4, rgba(0,120,212,0.1));
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-left: 4px;
+  vertical-align: middle;
+  line-height: 16px;
+}
+
+.hugr-cm-card-detail {
+  font-size: var(--jp-ui-font-size0);
+  color: var(--jp-ui-font-color2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 1px;
+}
+
+.hugr-cm-empty {
+  color: var(--jp-ui-font-color2);
+  font-style: italic;
+  padding: 16px 12px;
+  text-align: center;
+}
+
+/* ── Test result (below list) ── */
+.hugr-cm-result {
+  padding: 4px 12px;
+  font-size: var(--jp-ui-font-size0);
+  min-height: 16px;
+}
+
+.hugr-cm-ok {
+  color: var(--jp-success-color1, #4caf50);
+}
+
+.hugr-cm-err {
+  color: var(--jp-error-color1, #f44336);
+}
+
+.hugr-cm-info {
+  color: var(--jp-ui-font-color2);
+}
+
+/* ── Dialog form (used in showDialog body) ── */
+.hugr-dialog-form {
+  min-width: 320px;
+  padding: 8px 0;
+}
+
+.hugr-dialog-form .hugr-cm-field {
+  margin-bottom: 10px;
+}
+
+.hugr-dialog-form .hugr-cm-field label {
+  display: block;
+  font-size: var(--jp-ui-font-size0);
+  font-weight: 500;
+  color: var(--jp-ui-font-color1);
+  margin-bottom: 3px;
+}
+
+.hugr-dialog-form .hugr-cm-field input,
+.hugr-dialog-form .hugr-cm-field select {
+  width: 100%;
+  padding: 6px 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--jp-border-color1);
+  border-radius: 3px;
+  background: var(--jp-layout-color0);
+  color: var(--jp-ui-font-color0);
+  font-size: var(--jp-ui-font-size1);
+}
+
+.hugr-dialog-form .hugr-cm-field input:focus,
+.hugr-dialog-form .hugr-cm-field select:focus {
+  outline: none;
+  border-color: var(--jp-brand-color1);
+  box-shadow: 0 0 0 1px var(--jp-brand-color1);
+}
+
+/* ── Full-page dialog (for New Connection) ── */
+.hugr-dlg-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+.hugr-dlg {
+  background: var(--jp-layout-color1);
+  border: 1px solid var(--jp-border-color1);
+  border-radius: 8px;
+  width: 380px;
+  max-width: 90vw;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  font-size: var(--jp-ui-font-size1);
+  color: var(--jp-ui-font-color0);
+}
+
+.hugr-dlg-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--jp-border-color2);
+  font-weight: 600;
+  font-size: var(--jp-ui-font-size2);
+}
+
+.hugr-dlg-close {
+  background: none;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  color: var(--jp-ui-font-color2);
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.hugr-dlg-close:hover {
+  color: var(--jp-ui-font-color0);
+}
+
+.hugr-dlg-body {
+  padding: 16px;
+}
+
+.hugr-dlg-body .hugr-cm-field {
+  margin-bottom: 10px;
+}
+
+.hugr-dlg-body .hugr-cm-field label {
+  display: block;
+  font-size: var(--jp-ui-font-size0);
+  font-weight: 500;
+  color: var(--jp-ui-font-color1);
+  margin-bottom: 3px;
+}
+
+.hugr-dlg-body .hugr-cm-field input,
+.hugr-dlg-body .hugr-cm-field select {
+  width: 100%;
+  padding: 6px 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--jp-border-color1);
+  border-radius: 3px;
+  background: var(--jp-layout-color0);
+  color: var(--jp-ui-font-color0);
+  font-size: var(--jp-ui-font-size1);
+}
+
+.hugr-dlg-body .hugr-cm-field input:focus,
+.hugr-dlg-body .hugr-cm-field select:focus {
+  outline: none;
+  border-color: var(--jp-brand-color1);
+  box-shadow: 0 0 0 1px var(--jp-brand-color1);
+}
+
+.hugr-dlg-result {
+  font-size: var(--jp-ui-font-size0);
+  min-height: 18px;
+  margin-top: 4px;
+}
+
+.hugr-dlg-footer {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px 14px;
+  justify-content: flex-end;
+  border-top: 1px solid var(--jp-border-color2);
+}
+
+.hugr-dlg-btn {
+  padding: 5px 16px;
+  border: 1px solid var(--jp-border-color1);
+  border-radius: 3px;
+  background: var(--jp-layout-color1);
+  color: var(--jp-ui-font-color0);
+  font-size: var(--jp-ui-font-size1);
+  cursor: pointer;
+}
+
+.hugr-dlg-btn:hover {
+  background: var(--jp-layout-color2);
+}
+
+.hugr-dlg-btn-save {
+  background: var(--jp-brand-color1);
+  color: white;
+  border-color: var(--jp-brand-color1);
+}
+
+.hugr-dlg-btn-save:hover {
+  background: var(--jp-brand-color2);
+  border-color: var(--jp-brand-color2);
+}
+
+.hugr-dlg-btn-danger {
+  background: var(--jp-error-color1, #e53935);
+  color: white;
+  border-color: var(--jp-error-color1, #e53935);
+}
+
+.hugr-dlg-btn-danger:hover {
+  background: var(--jp-error-color2, #c62828);
+  border-color: var(--jp-error-color2, #c62828);
+}
+
+.hugr-dlg-sm {
+  width: 320px;
+}
+
+.hugr-dlg-sm .hugr-dlg-body p {
+  margin: 0;
+  color: var(--jp-ui-font-color1);
+  font-size: var(--jp-ui-font-size1);
+}
+
+/* ── Explorer ── */
+.hugr-logical-explorer,
+.hugr-schema-explorer {
+  padding: 8px;
+  overflow-y: auto;
+}
+
+.hugr-explorer-header {
+  padding: 4px;
+  border-bottom: 1px solid var(--jp-border-color1);
+  margin-bottom: 8px;
+}
+
+.hugr-btn-refresh {
+  float: right;
+  cursor: pointer;
+  background: none;
+  border: none;
+  font-size: 1.2em;
+}
+
+.hugr-tree-node {
+  padding: 2px 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.hugr-tree-node:hover {
+  background: var(--jp-layout-color2);
+}
+
+.hugr-node-expand {
+  display: inline-block;
+  width: 16px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.hugr-node-icon {
+  margin-right: 4px;
+}
+
+.hugr-node-desc {
+  color: var(--jp-content-font-color2);
+  font-size: 0.85em;
+}
+
+.hugr-empty {
+  color: var(--jp-content-font-color2);
+  font-style: italic;
+  padding: 16px;
+}
+
+/* ── Search ── */
+.hugr-search-container {
+  display: flex;
+  margin-bottom: 8px;
+}
+
+.hugr-search-input {
+  flex: 1;
+  padding: 4px 8px;
+}
+
+.hugr-search-clear {
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+
+/* ── Schema search results ── */
+.hugr-type-table {
+  width: 100%;
+  font-size: 0.85em;
+  border-collapse: collapse;
+}
+
+.hugr-type-table th,
+.hugr-type-table td {
+  padding: 2px 4px;
+  border: 1px solid var(--jp-border-color1);
+}
+
+/* ── Detail modal ── */
+.hugr-detail {
+  padding: 16px;
+}
+
+.hugr-detail-kind {
+  color: var(--jp-content-font-color2);
+  font-size: 0.85em;
+}
+
+.hugr-detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+}
+
+.hugr-detail-table th,
+.hugr-detail-table td {
+  padding: 4px 8px;
+  border: 1px solid var(--jp-border-color1);
+  text-align: left;
+}
+
+.hugr-detail-table th {
+  background: var(--jp-layout-color2);
+}
+
+/* ── Hover tooltip ── */
+.hugr-hover-tooltip {
+  padding: 8px 12px;
+  max-width: 400px;
+  font-size: 0.9em;
+}
+
+.hugr-hover-tooltip code {
+  background: var(--jp-layout-color2);
+  padding: 1px 4px;
+  border-radius: 2px;
+}
