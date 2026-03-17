@@ -4,6 +4,7 @@
 import { Widget } from '@lumino/widgets';
 import { LabIcon } from '@jupyterlab/ui-components';
 import { escapeHtml } from './utils';
+import { HugrClient } from './hugrClient';
 
 const BASE_URL = '/hugr';
 
@@ -237,17 +238,21 @@ export class ConnectionManagerWidget extends Widget {
       if (!vals.url) { showMsg('<span class="hugr-cm-err">URL is required</span>'); return; }
       showMsg('<span class="hugr-cm-info">Testing...</span>');
 
-      const body: any = { url: vals.url, auth_type: vals.auth_type };
-      if (vals.auth_type === 'api_key') body.api_key = vals.credential;
-      if (vals.auth_type === 'bearer') body.token = vals.credential;
-      if (vals.role) body.role = vals.role;
-
       try {
-        const resp = await fetch(`${BASE_URL}/test`, makeRequest('POST', body));
-        const result = await resp.json();
-        showMsg(result.ok
-          ? `<span class="hugr-cm-ok">v${escapeHtml(result.version)} (${result.cluster_mode ? 'cluster' : 'standalone'})</span>`
-          : `<span class="hugr-cm-err">${escapeHtml(result.error)}</span>`);
+        const client = new HugrClient({
+          url: vals.url,
+          authType: vals.auth_type as 'public' | 'api_key' | 'bearer',
+          apiKey: vals.auth_type === 'api_key' ? vals.credential : undefined,
+          token: vals.auth_type === 'bearer' ? vals.credential : undefined,
+          role: vals.role || undefined,
+        });
+        const response = await client.query('{ function { core { info { version } } } }');
+        if (response.errors.length > 0) {
+          showMsg(`<span class="hugr-cm-err">${escapeHtml(response.errors[0].message)}</span>`);
+        } else {
+          const version = response.data?.function?.core?.info?.version ?? 'unknown';
+          showMsg(`<span class="hugr-cm-ok">v${escapeHtml(String(version))}</span>`);
+        }
       } catch {
         showMsg('<span class="hugr-cm-err">Connection failed</span>');
       }
@@ -306,11 +311,17 @@ export class ConnectionManagerWidget extends Widget {
 
     const bodyEl = overlay.querySelector('.hugr-dlg-body') as HTMLElement;
     try {
-      const resp = await fetch(`${BASE_URL}/connections/${name}/test`, makeRequest('POST'));
-      const result = await resp.json();
-      bodyEl.innerHTML = result.ok
-        ? `<span class="hugr-cm-ok">v${escapeHtml(result.version)}</span>`
-        : `<span class="hugr-cm-err">${escapeHtml(result.error)}</span>`;
+      const client = new HugrClient({
+        url: `/hugr/proxy/${name}`,
+        authType: 'public',
+      });
+      const response = await client.query('{ function { core { info { version } } } }');
+      if (response.errors.length > 0) {
+        bodyEl.innerHTML = `<span class="hugr-cm-err">${escapeHtml(response.errors[0].message)}</span>`;
+      } else {
+        const version = response.data?.function?.core?.info?.version ?? 'unknown';
+        bodyEl.innerHTML = `<span class="hugr-cm-ok">v${escapeHtml(String(version))}</span>`;
+      }
     } catch {
       bodyEl.innerHTML = '<span class="hugr-cm-err">Connection failed</span>';
     }

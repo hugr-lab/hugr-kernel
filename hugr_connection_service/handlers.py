@@ -7,8 +7,9 @@ import json
 import os
 from pathlib import Path
 
-from jupyter_server.base.handlers import APIHandler
+from jupyter_server.base.handlers import APIHandler, JupyterHandler
 from jupyter_server.utils import url_path_join
+import tornado.httpclient
 import tornado.web
 
 
@@ -59,6 +60,65 @@ def _test_connection(url: str, auth_type: str = "public", **kwargs) -> dict:
         return {"ok": True, "version": "unknown"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+class ProxyHandler(JupyterHandler):
+    """POST /hugr/proxy/<connection_name> — proxy request to Hugr server."""
+
+    @tornado.web.authenticated
+    async def post(self, connection_name: str):
+        cfg = _load_config()
+        conn = _find_connection(cfg, connection_name)
+        if not conn:
+            self.set_status(404)
+            self.finish(json.dumps({"error": "not found"}))
+            return
+
+        url = conn.get("url", "").rstrip("/")
+        auth_type = conn.get("auth_type", "public")
+
+        headers = {"Content-Type": "application/json"}
+        if auth_type == "api_key" and conn.get("api_key"):
+            headers["X-Api-Key"] = conn["api_key"]
+        elif auth_type == "bearer" and conn.get("token"):
+            headers["Authorization"] = f"Bearer {conn['token']}"
+        if conn.get("role"):
+            headers["X-Hugr-Role"] = conn["role"]
+
+        client = tornado.httpclient.AsyncHTTPClient()
+        try:
+            response = await client.fetch(
+                url,
+                method="POST",
+                headers=headers,
+                body=self.request.body,
+                request_timeout=30,
+            )
+        except tornado.httpclient.HTTPClientError as e:
+            if e.response is not None:
+                self.set_status(e.response.code)
+                for name, value in e.response.headers.get_all():
+                    if name.lower() not in ("transfer-encoding", "connection", "content-length"):
+                        self.set_header(name, value)
+                self.finish(e.response.body)
+            else:
+                self.set_status(502)
+                self.finish(json.dumps({"error": f"connection error: {e}"}))
+            return
+        except Exception as e:
+            if "timeout" in str(e).lower():
+                self.set_status(504)
+                self.finish(json.dumps({"error": f"gateway timeout: {e}"}))
+            else:
+                self.set_status(502)
+                self.finish(json.dumps({"error": f"connection error: {e}"}))
+            return
+
+        self.set_status(response.code)
+        for name, value in response.headers.get_all():
+            if name.lower() not in ("transfer-encoding", "connection", "content-length"):
+                self.set_header(name, value)
+        self.finish(response.body)
 
 
 class ConnectionsHandler(APIHandler):
@@ -211,6 +271,7 @@ def setup_handlers(web_app):
     route = lambda pattern: url_path_join(base_url, "hugr", pattern)
 
     web_app.add_handlers(host_pattern, [
+        (route(r"proxy/([^/]+)"), ProxyHandler),
         (route("connections"), ConnectionsHandler),
         (route(r"connections/([^/]+)/default"), ConnectionDefaultHandler),
         (route(r"connections/([^/]+)/test"), ConnectionTestHandler),

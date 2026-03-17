@@ -12,10 +12,11 @@ import { autocompletion } from '@codemirror/autocomplete';
 import { hoverTooltip } from '@codemirror/view';
 
 import { ConnectionManagerWidget } from './connectionManager';
-import { CommClient } from './commClient';
-import { LogicalExplorerWidget } from './explorer/logicalExplorer';
-import { SchemaExplorerWidget } from './explorer/schemaExplorer';
-import { DetailModal } from './explorer/detailModal';
+import { HugrExplorerWidget } from './explorer/hugrExplorer';
+import { SchemaTreeSection } from './explorer/schemaTree';
+import { TypesSearchSection } from './explorer/typesSearch';
+import { DirectivesListSection } from './explorer/directivesList';
+import { showDetailModal } from './explorer/detailModal';
 import { graphqlLanguage } from './graphql/language';
 import { graphqlCompletionSource, setCompletionSessionContext } from './graphql/completion';
 import { graphqlHoverSource, setHoverSessionContext } from './graphql/hover';
@@ -34,34 +35,66 @@ const connectionManagerPlugin: JupyterFrontEndPlugin<void> = {
 const explorerPlugin: JupyterFrontEndPlugin<void> = {
   id: '@hugr-lab/jupyterlab-graphql-ide:explorer',
   autoStart: true,
-  requires: [INotebookTracker],
-  activate: (app: JupyterFrontEnd, notebooks: INotebookTracker) => {
-    const commClient = new CommClient();
-    const catalogExplorer = new LogicalExplorerWidget(commClient);
-    const schemaExplorer = new SchemaExplorerWidget(commClient);
-    const detailModal = new DetailModal(commClient);
+  activate: (app: JupyterFrontEnd) => {
+    const explorer = new HugrExplorerWidget();
+    app.shell.add(explorer, 'right', { rank: 100 });
 
-    app.shell.add(catalogExplorer, 'right', { rank: 100 });
-    app.shell.add(schemaExplorer, 'right', { rank: 101 });
+    // Section widgets — created lazily after connections load
+    let schemaTree: SchemaTreeSection | null = null;
+    let typesSearch: TypesSearchSection | null = null;
+    let directivesList: DirectivesListSection | null = null;
 
-    // Connect to kernel when notebook changes
-    notebooks.currentChanged.connect(async (_, notebook) => {
-      if (notebook?.sessionContext?.session?.kernel) {
-        await commClient.connect(notebook.sessionContext.session.kernel);
-        catalogExplorer.refresh();
-        schemaExplorer.refresh();
+    const initSections = () => {
+      const schemaContainer = explorer.getSectionContainer('schema');
+      const typesContainer = explorer.getSectionContainer('types');
+      const directivesContainer = explorer.getSectionContainer('directives');
+
+      if (schemaContainer && !schemaTree) {
+        schemaTree = new SchemaTreeSection(schemaContainer, (typeName: string) => {
+          const client = explorer.getClient();
+          if (client) {
+            showDetailModal(client, typeName, (nav: string) => explorer.navigateToTypes(nav));
+          }
+        });
       }
-    });
-
-    // Handle detail clicks
-    catalogExplorer.node.addEventListener('hugr-node-click', async (e: any) => {
-      const nodeId = e.detail?.nodeId;
-      if (nodeId) {
-        await detailModal.showDetail(nodeId);
-        app.shell.add(detailModal, 'main');
-        app.shell.activateById(detailModal.id);
+      if (typesContainer && !typesSearch) {
+        typesSearch = new TypesSearchSection(typesContainer, (typeName: string) => {
+          explorer.navigateToTypes(typeName);
+        });
       }
-    });
+      if (directivesContainer && !directivesList) {
+        directivesList = new DirectivesListSection(directivesContainer);
+      }
+    };
+
+    // Listen for connection changes to update section clients
+    explorer.node.addEventListener('hugr-connection-changed', ((e: CustomEvent) => {
+      const { client } = e.detail;
+      // Ensure sections are initialized (containers exist after first render)
+      initSections();
+      if (schemaTree) schemaTree.setClient(client);
+      if (typesSearch) typesSearch.setClient(client);
+      if (directivesList) directivesList.setClient(client);
+    }) as EventListener);
+
+    // Listen for types search navigation requests
+    explorer.node.addEventListener('hugr-types-search', ((e: CustomEvent) => {
+      if (typesSearch) {
+        typesSearch.setSearchQuery(e.detail.query);
+      }
+    }) as EventListener);
+
+    const loadConnections = async () => {
+      try {
+        const resp = await fetch('/hugr/connections');
+        const connections = await resp.json();
+        const defaultConn = connections.find((c: any) => c.status === 'default');
+        explorer.setConnections(connections, defaultConn?.name || null);
+      } catch (e) {
+        console.error('Failed to load connections for explorer', e);
+      }
+    };
+    loadConnections();
   },
 };
 

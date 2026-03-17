@@ -1,0 +1,244 @@
+/**
+ * HugrExplorerWidget — unified explorer panel with connection selector,
+ * tabbed sections (Schema, Types, Directives), and pluggable section containers.
+ */
+
+import { Widget } from '@lumino/widgets';
+import { HugrClient } from '../hugrClient';
+
+type SectionName = 'schema' | 'types' | 'directives';
+
+export class HugrExplorerWidget extends Widget {
+  private _client: HugrClient | null = null;
+  private _connections: any[] = [];
+  private _selectedConnection: string | null = null;
+  private _schemaSection: HTMLElement | null = null;
+  private _typesSection: HTMLElement | null = null;
+  private _directivesSection: HTMLElement | null = null;
+  private _activeSection: SectionName = 'schema';
+
+  constructor() {
+    super();
+    this.id = 'hugr-explorer';
+    this.addClass('hugr-explorer');
+    this.title.label = 'Hugr Explorer';
+    this.title.closable = true;
+    this._render();
+  }
+
+  get client(): HugrClient | null {
+    return this._client;
+  }
+
+  get selectedConnection(): string | null {
+    return this._selectedConnection;
+  }
+
+  getClient(): HugrClient | null {
+    return this._client;
+  }
+
+  setConnections(connections: any[], defaultName: string | null): void {
+    this._connections = connections;
+    if (defaultName !== null) {
+      this._selectedConnection = defaultName;
+    }
+    this._render();
+    if (this._selectedConnection) {
+      this._onConnectionChange(this._selectedConnection);
+    }
+  }
+
+  /**
+   * Switch to the Types tab and trigger a search query.
+   * Enables cross-reference navigation from schema tree and detail modals.
+   */
+  navigateToTypes(searchQuery: string): void {
+    this._onTabClick('types');
+
+    this.node.dispatchEvent(
+      new CustomEvent('hugr-types-search', {
+        bubbles: true,
+        detail: { query: searchQuery }
+      })
+    );
+  }
+
+  getSectionContainer(section: SectionName): HTMLElement | null {
+    switch (section) {
+      case 'schema':
+        return this._schemaSection;
+      case 'types':
+        return this._typesSection;
+      case 'directives':
+        return this._directivesSection;
+      default:
+        return null;
+    }
+  }
+
+  private _render(): void {
+    const node = this.node;
+    node.innerHTML = '';
+
+    const container = document.createElement('div');
+    container.className = 'hugr-explorer-container';
+
+    if (this._connections.length === 0) {
+      container.innerHTML =
+        '<div class="hugr-explorer-empty">Add a connection in Connection Manager</div>';
+      node.appendChild(container);
+      this._schemaSection = null;
+      this._typesSection = null;
+      this._directivesSection = null;
+      return;
+    }
+
+    // Connection selector bar
+    const connBar = document.createElement('div');
+    connBar.className = 'hugr-explorer-conn-bar';
+
+    const select = document.createElement('select');
+    select.className = 'hugr-explorer-conn-select';
+    for (const conn of this._connections) {
+      const option = document.createElement('option');
+      const name =
+        typeof conn === 'string' ? conn : conn.name ?? String(conn);
+      option.value = name;
+      option.textContent = name;
+      if (name === this._selectedConnection) {
+        option.selected = true;
+      }
+      select.appendChild(option);
+    }
+    select.addEventListener('change', () => {
+      this._onConnectionChange(select.value);
+    });
+    connBar.appendChild(select);
+    container.appendChild(connBar);
+
+    // Tab buttons
+    const tabs = document.createElement('div');
+    tabs.className = 'hugr-explorer-tabs';
+
+    const sections: { key: SectionName; label: string }[] = [
+      { key: 'schema', label: 'Schema' },
+      { key: 'types', label: 'Types' },
+      { key: 'directives', label: 'Directives' }
+    ];
+
+    for (const sec of sections) {
+      const btn = document.createElement('button');
+      btn.className = 'hugr-explorer-tab';
+      if (sec.key === this._activeSection) {
+        btn.classList.add('active');
+      }
+      btn.dataset.section = sec.key;
+      btn.textContent = sec.label;
+      btn.addEventListener('click', () => {
+        this._onTabClick(sec.key);
+      });
+      tabs.appendChild(btn);
+    }
+    container.appendChild(tabs);
+
+    // Content area with section containers
+    const content = document.createElement('div');
+    content.className = 'hugr-explorer-content';
+
+    const schemaDiv = document.createElement('div');
+    schemaDiv.className = 'hugr-explorer-section';
+    schemaDiv.dataset.section = 'schema';
+    schemaDiv.style.display = this._activeSection === 'schema' ? '' : 'none';
+    this._schemaSection = schemaDiv;
+    content.appendChild(schemaDiv);
+
+    const typesDiv = document.createElement('div');
+    typesDiv.className = 'hugr-explorer-section';
+    typesDiv.dataset.section = 'types';
+    typesDiv.style.display = this._activeSection === 'types' ? '' : 'none';
+    this._typesSection = typesDiv;
+    content.appendChild(typesDiv);
+
+    const directivesDiv = document.createElement('div');
+    directivesDiv.className = 'hugr-explorer-section';
+    directivesDiv.dataset.section = 'directives';
+    directivesDiv.style.display =
+      this._activeSection === 'directives' ? '' : 'none';
+    this._directivesSection = directivesDiv;
+    content.appendChild(directivesDiv);
+
+    container.appendChild(content);
+    node.appendChild(container);
+  }
+
+  private _onConnectionChange(name: string): void {
+    // Abort previous client if it exists
+    if (this._client) {
+      this._client.abort();
+    }
+
+    // Find connection config to get URL and auth
+    const conn = this._connections.find((c: any) => {
+      const n = typeof c === 'string' ? c : c.name ?? String(c);
+      return n === name;
+    });
+
+    const url = (conn?.url || '').replace(/\/+$/, '');
+    const authType = conn?.auth_type || 'public';
+
+    this._client = new HugrClient({
+      url,
+      authType,
+      apiKey: conn?.api_key,
+      token: conn?.token,
+      role: conn?.role,
+    });
+
+    this._selectedConnection = name;
+
+    // Update the dropdown to reflect the new selection
+    const select = this.node.querySelector(
+      '.hugr-explorer-conn-select'
+    ) as HTMLSelectElement | null;
+    if (select) {
+      select.value = name;
+    }
+
+    this.node.dispatchEvent(
+      new CustomEvent('hugr-connection-changed', {
+        bubbles: true,
+        detail: { name, client: this._client }
+      })
+    );
+  }
+
+  private _onTabClick(section: SectionName): void {
+    this._activeSection = section;
+
+    // Update tab active classes
+    const tabButtons = this.node.querySelectorAll('.hugr-explorer-tab');
+    tabButtons.forEach(btn => {
+      const el = btn as HTMLElement;
+      if (el.dataset.section === section) {
+        el.classList.add('active');
+      } else {
+        el.classList.remove('active');
+      }
+    });
+
+    // Show/hide section divs
+    const sectionDivs = this.node.querySelectorAll('.hugr-explorer-section');
+    sectionDivs.forEach(div => {
+      const el = div as HTMLElement;
+      el.style.display = el.dataset.section === section ? '' : 'none';
+    });
+
+    this.node.dispatchEvent(
+      new CustomEvent('hugr-section-changed', {
+        bubbles: true,
+        detail: { section }
+      })
+    );
+  }
+}
