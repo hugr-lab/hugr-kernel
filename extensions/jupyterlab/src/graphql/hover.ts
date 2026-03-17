@@ -35,6 +35,24 @@ export async function graphqlHoverSource(
         const dom = document.createElement('div');
         dom.className = 'hugr-hover-tooltip';
         dom.innerHTML = markdownToHtml(markdown);
+
+        // Make hugr-type: links clickable → navigate to Types search or open detail modal
+        dom.addEventListener('click', (e) => {
+          const target = e.target as HTMLElement;
+          const anchor = target.closest('a[href^="hugr-type:"]') as HTMLAnchorElement | null;
+          if (anchor) {
+            e.preventDefault();
+            e.stopPropagation();
+            const typeName = anchor.getAttribute('href')!.replace('hugr-type:', '');
+            dom.dispatchEvent(
+              new CustomEvent('hugr-types-search', {
+                bubbles: true,
+                detail: { query: typeName },
+              })
+            );
+          }
+        });
+
         return { dom };
       },
     };
@@ -44,9 +62,14 @@ export async function graphqlHoverSource(
 }
 
 function markdownToHtml(md: string): string {
-  // Simple markdown conversion for hover
   return md
-    .replace(/### `(.+?)`: `(.+?)`/g, '<strong>$1</strong>: <code>$2</code>')
+    // Markdown links first: [`text`](hugr-type:X) or [text](hugr-type:X)
+    .replace(/\[`(.+?)`\]\((hugr-type:[^)]+)\)/g,
+      '<a href="$2" class="hugr-type-link"><code>$1</code></a>')
+    .replace(/\[(.+?)\]\((hugr-type:[^)]+)\)/g,
+      '<a href="$2" class="hugr-type-link">$1</a>')
+    // Headings: ### text → <strong>
+    .replace(/^### (.+)$/gm, '<strong>$1</strong>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/`(.+?)`/g, '<code>$1</code>')
     .replace(/\n/g, '<br>');

@@ -63,7 +63,7 @@ func (ins *Inspector) inspectField(ctx context.Context, conn *connection.Connect
 
 	for _, f := range ti.Fields {
 		if f.Name == fieldName {
-			md := fmt.Sprintf("### `%s`: `%s`\n", f.Name, f.Type.Format())
+			md := fmt.Sprintf("### `%s`: %s\n", f.Name, typeLink(f.Type.Format(), f.Type.UnwrapName()))
 			plain := fmt.Sprintf("%s: %s", f.Name, f.Type.Format())
 
 			if f.Description != "" {
@@ -74,12 +74,12 @@ func (ins *Inspector) inspectField(ctx context.Context, conn *connection.Connect
 			if len(f.Args) > 0 {
 				var argStrs []string
 				for _, a := range f.Args {
-					argStrs = append(argStrs, fmt.Sprintf("%s: %s", a.Name, a.Type.Format()))
+					argStrs = append(argStrs, fmt.Sprintf("%s: %s", a.Name, typeLink(a.Type.Format(), a.Type.UnwrapName())))
 				}
 				md += "\n**Arguments**: " + strings.Join(argStrs, ", ") + "\n"
 			}
 
-			md += "\n**Type**: " + typeName
+			md += "\n**Type**: " + typeLink(typeName, typeName)
 
 			if f.IsDeprecated && f.DeprecationReason != "" {
 				md += "\n\n**Deprecated**: " + f.DeprecationReason
@@ -101,7 +101,7 @@ func (ins *Inspector) inspectArgument(ctx context.Context, conn *connection.Conn
 		if f.Name == parentField {
 			for _, a := range f.Args {
 				if a.Name == argName {
-					md := fmt.Sprintf("### `%s`: `%s`\n", a.Name, a.Type.Format())
+					md := fmt.Sprintf("### `%s`: %s\n", a.Name, typeLink(a.Type.Format(), a.Type.UnwrapName()))
 					plain := fmt.Sprintf("%s: %s", a.Name, a.Type.Format())
 					if a.Description != "" {
 						md += "\n" + a.Description + "\n"
@@ -188,7 +188,7 @@ func (ins *Inspector) inspectInputFieldFromType(ti *schema.TypeInfo, token strin
 	// Check input fields
 	for _, field := range ti.InputFields {
 		if field.Name == token {
-			md := fmt.Sprintf("### `%s`: `%s`\n", field.Name, field.Type.Format())
+			md := fmt.Sprintf("### `%s`: %s\n", field.Name, typeLink(field.Type.Format(), field.Type.UnwrapName()))
 			plain := fmt.Sprintf("%s: %s", field.Name, field.Type.Format())
 			if field.Description != "" {
 				md += "\n" + field.Description + "\n"
@@ -197,7 +197,7 @@ func (ins *Inspector) inspectInputFieldFromType(ti *schema.TypeInfo, token strin
 			if field.DefaultValue != nil {
 				md += fmt.Sprintf("\n**Default**: `%s`", *field.DefaultValue)
 			}
-			md += "\n**Input type**: " + ti.Name
+			md += "\n**Input type**: " + typeLink(ti.Name, ti.Name)
 			return &Result{Found: true, Markdown: md, Plain: plain}
 		}
 	}
@@ -211,7 +211,7 @@ func (ins *Inspector) inspectInputFieldFromType(ti *schema.TypeInfo, token strin
 				md += "\n" + ev.Description + "\n"
 				plain += "\n" + ev.Description
 			}
-			md += "\n**Enum**: " + ti.Name
+			md += "\n**Enum**: " + typeLink(ti.Name, ti.Name)
 			return &Result{Found: true, Markdown: md, Plain: plain}
 		}
 	}
@@ -245,4 +245,14 @@ func extractToken(code string, pos int) (token string, start, end int) {
 
 func isIdentChar(ch byte) bool {
 	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_'
+}
+
+// typeLink creates a markdown link with hugr-type: scheme for clickable type navigation.
+// displayText is the formatted type string (e.g., "[OrderByField!]!"),
+// typeName is the unwrapped type name (e.g., "OrderByField").
+func typeLink(displayText, typeName string) string {
+	if typeName == "" || strings.HasPrefix(typeName, "__") {
+		return "`" + displayText + "`"
+	}
+	return "[`" + displayText + "`](hugr-type:" + typeName + ")"
 }

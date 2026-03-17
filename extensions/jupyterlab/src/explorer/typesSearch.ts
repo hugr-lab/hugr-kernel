@@ -236,8 +236,6 @@ export class TypesSearchSection {
 
     const gridDiv = document.createElement('div');
     gridDiv.className = 'ag-theme-alpine hugr-types-grid';
-    const gridHeight = Math.min(500, 40 + rowData.length * 36);
-    gridDiv.style.height = `${gridHeight}px`;
     gridDiv.style.width = '100%';
     resultsContainer.appendChild(gridDiv);
 
@@ -262,15 +260,21 @@ export class TypesSearchSection {
         flex: 2,
         minWidth: 150,
         sortable: true,
-        autoHeight: true,
-        cellStyle: { 'white-space': 'normal', 'line-height': '1.4' },
+        cellStyle: {
+          'white-space': 'nowrap',
+          'overflow': 'hidden',
+          'text-overflow': 'ellipsis',
+        },
+        tooltipField: 'description',
       },
     ];
 
     const gridOptions: GridOptions = {
       columnDefs,
       rowData,
-      domLayout: rowData.length <= 12 ? 'autoHeight' : 'normal',
+      domLayout: 'autoHeight',
+      rowHeight: 36,
+      tooltipShowDelay: 300,
       suppressCellFocus: true,
       onRowClicked: (event: any) => {
         const typeName = event.data?._typeName;

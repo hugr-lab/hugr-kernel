@@ -72,6 +72,31 @@ func TestResolveCursorContext(t *testing.T) {
 			wantPF:   "data_sources",
 			wantPfx:  "fi",
 		},
+		{
+			name:     "enum value in input object",
+			code:     "{\n    core{\n        catalog{\n            catalogs(order_by: [{direction: A",
+			wantKind: ContextArgumentValue,
+			wantPF:   "catalogs",
+			wantArg:  "order_by",
+			wantInput: []string{"direction"},
+			wantPfx:  "A",
+		},
+		{
+			name:     "field name in list of input objects",
+			code:     "{\n    core{\n        catalog{\n            catalogs(order_by: [{fi",
+			wantKind: ContextArgumentValue,
+			wantPF:   "catalogs",
+			wantArg:  "order_by",
+			wantPfx:  "fi",
+		},
+		{
+			name:     "nested input inside list value",
+			code:     "{\n    core{\n        catalog{\n            catalogs(order_by: [{direction: ",
+			wantKind: ContextArgumentValue,
+			wantPF:   "catalogs",
+			wantArg:  "order_by",
+			wantInput: []string{"direction"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -97,6 +122,9 @@ func TestResolveCursorContext(t *testing.T) {
 			}
 			if tt.wantPfx != "" && ctx.Prefix != tt.wantPfx {
 				t.Errorf("Prefix: got %q, want %q", ctx.Prefix, tt.wantPfx)
+			}
+			if tt.wantInput != nil && fmt.Sprint(ctx.InputPath) != fmt.Sprint(tt.wantInput) {
+				t.Errorf("InputPath: got %v, want %v", ctx.InputPath, tt.wantInput)
 			}
 		})
 	}

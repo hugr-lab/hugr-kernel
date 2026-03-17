@@ -298,6 +298,21 @@ func resolveInFieldArgs(field *ast.Field, code string, cursorPos int, prefix str
 		}
 	}
 
+	// ListValue — e.g. order_by: [{direction: ASC}]
+	if arg.Value.Kind == ast.ListValue {
+		inputPath := buildInputPathInList(arg.Value, cursorPos)
+		return &CursorContext{
+			Kind:          ContextArgumentValue,
+			FieldPath:     copySlice(path),
+			Prefix:        prefix,
+			ParentField:   field.Name,
+			ArgumentName:  arg.Name,
+			InputPath:     inputPath,
+			Depth:         len(path) + 1,
+			OperationType: opType,
+		}
+	}
+
 	// If the arg has a value with Kind == EnumValue and its raw matches the prefix,
 	// the parser likely interpreted an incomplete arg name as a value.
 	// e.g., "data_sources(fi" → parser creates Arg{Name:"fi", Value:{Kind:EnumValue, Raw:"fi"}}
@@ -334,10 +349,11 @@ func buildInputPath(val *ast.Value, cursorPos int) []string {
 		return nil
 	}
 
-	// Find the child closest to cursor
+	// Find the child closest to cursor, skipping spurious empty-name children
+	// that the parser creates for partial input.
 	var lastChild *ast.ChildValue
 	for _, child := range val.Children {
-		if child.Position != nil && child.Position.Start <= cursorPos {
+		if child.Position != nil && child.Position.Start <= cursorPos && child.Name != "" {
 			lastChild = child
 		}
 	}
@@ -365,9 +381,10 @@ func buildInputPath(val *ast.Value, cursorPos int) []string {
 		return append([]string{lastChild.Name}, sub...)
 	}
 
-	// The child is a leaf or partial — don't include it in the path
-	// (it's either the prefix being typed or a completed value)
-	return nil
+	// The child is a leaf value (scalar, enum, etc.) — include it in the path
+	// so the completer can resolve the field's type for value completion
+	// (e.g., direction: ASC → path=["direction"] → resolve to OrderDirection ENUM)
+	return []string{lastChild.Name}
 }
 
 // buildInputPathInList walks through list elements to find the one containing cursor,

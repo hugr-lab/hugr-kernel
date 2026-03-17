@@ -4,7 +4,28 @@
  */
 
 import { Widget } from '@lumino/widgets';
+import { LabIcon } from '@jupyterlab/ui-components';
 import { HugrClient } from '../hugrClient';
+
+const explorerIcon = new LabIcon({
+  name: '@hugr-lab/jupyterlab-graphql-ide:explorer-icon',
+  svgstr:
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+    '<circle cx="12" cy="4" r="2.5" fill="currentColor" opacity="0.3" stroke="currentColor"/>' +
+    '<circle cx="5" cy="12" r="2.5" fill="currentColor" opacity="0.3" stroke="currentColor"/>' +
+    '<circle cx="19" cy="12" r="2.5" fill="currentColor" opacity="0.3" stroke="currentColor"/>' +
+    '<circle cx="3" cy="20" r="2" fill="currentColor" opacity="0.3" stroke="currentColor"/>' +
+    '<circle cx="9" cy="20" r="2" fill="currentColor" opacity="0.3" stroke="currentColor"/>' +
+    '<circle cx="16" cy="20" r="2" fill="currentColor" opacity="0.3" stroke="currentColor"/>' +
+    '<circle cx="22" cy="20" r="2" fill="currentColor" opacity="0.3" stroke="currentColor"/>' +
+    '<line x1="12" y1="6.5" x2="5" y2="9.5"/>' +
+    '<line x1="12" y1="6.5" x2="19" y2="9.5"/>' +
+    '<line x1="5" y1="14.5" x2="3" y2="18"/>' +
+    '<line x1="5" y1="14.5" x2="9" y2="18"/>' +
+    '<line x1="19" y1="14.5" x2="16" y2="18"/>' +
+    '<line x1="19" y1="14.5" x2="22" y2="18"/>' +
+    '</svg>',
+});
 
 type SectionName = 'schema' | 'types' | 'directives';
 
@@ -21,7 +42,8 @@ export class HugrExplorerWidget extends Widget {
     super();
     this.id = 'hugr-explorer';
     this.addClass('hugr-explorer');
-    this.title.label = 'Hugr Explorer';
+    this.title.icon = explorerIcon;
+    this.title.caption = 'Hugr Explorer';
     this.title.closable = true;
     this._render();
   }

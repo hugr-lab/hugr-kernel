@@ -458,6 +458,17 @@
   border-radius: 2px;
 }
 
+.hugr-hover-tooltip .hugr-type-link {
+  color: var(--jp-brand-color1);
+  text-decoration: none;
+  cursor: pointer;
+  border-bottom: 1px dotted var(--jp-brand-color1);
+}
+
+.hugr-hover-tooltip .hugr-type-link:hover {
+  text-decoration: underline;
+}
+
 /* ── Hugr Explorer Panel ── */
 .hugr-explorer {
   padding: 0;

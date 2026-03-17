@@ -77,10 +77,23 @@ const explorerPlugin: JupyterFrontEndPlugin<void> = {
       if (directivesList) directivesList.setClient(client);
     }) as EventListener);
 
-    // Listen for types search navigation requests
+    // Listen for types search navigation requests from within the explorer
     explorer.node.addEventListener('hugr-types-search', ((e: CustomEvent) => {
+      e.stopPropagation(); // prevent document listener from re-triggering
       if (typesSearch) {
         typesSearch.setSearchQuery(e.detail.query);
+      }
+    }) as EventListener);
+
+    // Listen at document level for events from hover tooltips (outside explorer DOM)
+    document.addEventListener('hugr-types-search', ((e: CustomEvent) => {
+      // Show and activate the explorer panel if it's hidden/closed
+      if (!explorer.isVisible) {
+        app.shell.add(explorer, 'right', { rank: 100 });
+      }
+      app.shell.activateById(explorer.id);
+      if (typesSearch) {
+        explorer.navigateToTypes(e.detail.query);
       }
     }) as EventListener);
 
