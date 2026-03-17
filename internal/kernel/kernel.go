@@ -210,8 +210,19 @@ func (k *Kernel) controlLoop(ctx context.Context) {
 			continue
 		}
 
-		if msg.Header.MsgType == "shutdown_request" {
+		switch msg.Header.MsgType {
+		case "shutdown_request":
 			k.handleShutdownRequest(msg)
+		case "interrupt_request":
+			// no-op for now
+			reply := NewMessage(msg, "interrupt_reply")
+			reply.Content = map[string]any{"status": "ok"}
+			if err := k.sendMessage(k.controlSocket, reply); err != nil {
+				log.Printf("send interrupt_reply error: %v", err)
+			}
+		default:
+			// Some messages (comm_info_request, etc.) can arrive on control channel
+			k.handleShellMessage(ctx, msg)
 		}
 	}
 }
