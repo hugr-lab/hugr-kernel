@@ -30,12 +30,10 @@ func NewInspector(sc *schema.Client) *Inspector {
 
 // Inspect returns hover information for the token at the cursor position.
 func (ins *Inspector) Inspect(ctx context.Context, conn *connection.Connection, code string, cursorPos int) *Result {
-	token, start, end := extractToken(code, cursorPos)
+	token, _, _ := extractToken(code, cursorPos)
 	if token == "" {
 		return nil
 	}
-	_ = start
-	_ = end
 
 	cctx := completion.ResolveCursorContext(code, cursorPos)
 	if cctx == nil {
@@ -164,43 +162,11 @@ func (ins *Inspector) inspectArgumentValue(ctx context.Context, conn *connection
 
 // inspectInputPath walks through nested input types to find hover info for the token.
 func (ins *Inspector) inspectInputPath(ctx context.Context, conn *connection.Connection, args []schema.ArgInfo, inputPath []string, token string) *Result {
-	if len(inputPath) == 0 {
+	ti, err := schema.ResolveInputType(ctx, ins.Schema, conn, args, inputPath)
+	if err != nil || ti == nil {
 		return nil
 	}
-
-	// First element is the argument name
-	argName := inputPath[0]
-	var currentTypeName string
-	for _, arg := range args {
-		if arg.Name == argName {
-			currentTypeName = arg.Type.UnwrapName()
-			break
-		}
-	}
-	if currentTypeName == "" {
-		return nil
-	}
-
-	// Walk remaining path through input fields
-	for _, fieldName := range inputPath[1:] {
-		ti, err := ins.Schema.GetType(ctx, conn, currentTypeName)
-		if err != nil || ti == nil {
-			return nil
-		}
-		found := false
-		for _, f := range ti.InputFields {
-			if f.Name == fieldName {
-				currentTypeName = f.Type.UnwrapName()
-				found = true
-				break
-			}
-		}
-		if !found {
-			return nil
-		}
-	}
-
-	return ins.inspectInputField(ctx, conn, currentTypeName, token)
+	return ins.inspectInputFieldFromType(ti, token)
 }
 
 // inspectInputField looks up a token in the input type's fields or enum values.
@@ -214,6 +180,11 @@ func (ins *Inspector) inspectInputField(ctx context.Context, conn *connection.Co
 		return nil
 	}
 
+	return ins.inspectInputFieldFromType(ti, token)
+}
+
+// inspectInputFieldFromType looks up a token in an already-resolved TypeInfo's fields or enum values.
+func (ins *Inspector) inspectInputFieldFromType(ti *schema.TypeInfo, token string) *Result {
 	// Check input fields
 	for _, field := range ti.InputFields {
 		if field.Name == token {
@@ -226,7 +197,7 @@ func (ins *Inspector) inspectInputField(ctx context.Context, conn *connection.Co
 			if field.DefaultValue != nil {
 				md += fmt.Sprintf("\n**Default**: `%s`", *field.DefaultValue)
 			}
-			md += "\n**Input type**: " + typeName
+			md += "\n**Input type**: " + ti.Name
 			return &Result{Found: true, Markdown: md, Plain: plain}
 		}
 	}
@@ -240,7 +211,7 @@ func (ins *Inspector) inspectInputField(ctx context.Context, conn *connection.Co
 				md += "\n" + ev.Description + "\n"
 				plain += "\n" + ev.Description
 			}
-			md += "\n**Enum**: " + typeName
+			md += "\n**Enum**: " + ti.Name
 			return &Result{Found: true, Markdown: md, Plain: plain}
 		}
 	}

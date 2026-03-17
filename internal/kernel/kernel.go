@@ -220,9 +220,43 @@ func (k *Kernel) controlLoop(ctx context.Context) {
 			if err := k.sendMessage(k.controlSocket, reply); err != nil {
 				log.Printf("send interrupt_reply error: %v", err)
 			}
+		case "kernel_info_request":
+			k.publishStatus(msg, "busy")
+			reply := NewMessage(msg, "kernel_info_reply")
+			content := map[string]any{
+				"protocol_version":       ProtocolVersion,
+				"implementation":         "hugr-kernel",
+				"implementation_version": KernelVersion,
+				"language_info": map[string]any{
+					"name":           "graphql",
+					"version":        "",
+					"mimetype":       "application/graphql",
+					"file_extension": ".graphql",
+				},
+				"banner": fmt.Sprintf("Hugr GraphQL Kernel v%s", KernelVersion),
+				"status": "ok",
+			}
+			if k.arrowServer != nil {
+				content["hugr_base_url"] = k.arrowServer.BaseURL()
+			}
+			reply.Content = content
+			if err := k.sendMessage(k.controlSocket, reply); err != nil {
+				log.Printf("send kernel_info_reply (control) error: %v", err)
+			}
+			k.publishStatus(msg, "idle")
+		case "comm_info_request":
+			k.publishStatus(msg, "busy")
+			reply := NewMessage(msg, "comm_info_reply")
+			reply.Content = map[string]any{
+				"status": "ok",
+				"comms":  map[string]any{},
+			}
+			if err := k.sendMessage(k.controlSocket, reply); err != nil {
+				log.Printf("send comm_info_reply (control) error: %v", err)
+			}
+			k.publishStatus(msg, "idle")
 		default:
-			// Some messages (comm_info_request, etc.) can arrive on control channel
-			k.handleShellMessage(ctx, msg)
+			log.Printf("unhandled control message type: %s", msg.Header.MsgType)
 		}
 	}
 }

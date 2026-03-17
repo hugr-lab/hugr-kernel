@@ -4,6 +4,7 @@
 import { Widget } from '@lumino/widgets';
 import { CommClient } from '../commClient';
 import { SearchBar } from './searchBar';
+import { escapeHtml } from '../utils';
 
 interface TreeNode {
   id: string;
@@ -48,7 +49,7 @@ export class LogicalExplorerWidget extends Widget {
     const info = this._serverInfo;
     const header = info.version
       ? `<div class="hugr-explorer-header">
-          <strong>Hugr</strong> v${info.version} (${info.cluster_mode || ''})
+          <strong>Hugr</strong> v${escapeHtml(info.version)} (${escapeHtml(info.cluster_mode || '')})
           <button class="hugr-btn-refresh">↻</button>
         </div>`
       : '';
@@ -67,12 +68,12 @@ export class LogicalExplorerWidget extends Widget {
       const children = n.expanded && n.children?.length
         ? this._renderNodes(n.children, indent + 1)
         : '';
-      const desc = n.description ? ` <span class="hugr-node-desc">(${n.description})</span>` : '';
+      const desc = n.description ? ` <span class="hugr-node-desc">(${escapeHtml(n.description)})</span>` : '';
       return `
-        <div class="hugr-tree-node" data-id="${n.id}" style="padding-left:${indent * 16}px">
-          <span class="hugr-node-expand" data-id="${n.id}">${expandIcon}</span>
+        <div class="hugr-tree-node" data-id="${escapeHtml(n.id)}" style="padding-left:${indent * 16}px">
+          <span class="hugr-node-expand" data-id="${escapeHtml(n.id)}">${expandIcon}</span>
           <span class="hugr-node-icon">${icon}</span>
-          <span class="hugr-node-label" data-id="${n.id}">${n.label}</span>${desc}
+          <span class="hugr-node-label" data-id="${escapeHtml(n.id)}">${escapeHtml(n.label)}</span>${desc}
         </div>
         ${children}
       `;

@@ -95,6 +95,28 @@
   flex-shrink: 0;
 }
 
+.hugr-cm-card-default {
+  border-left: 3px solid var(--jp-brand-color1);
+  padding-left: 9px;
+}
+
+.hugr-cm-card-default .hugr-cm-card-name {
+  font-weight: 600;
+}
+
+.hugr-cm-badge-default {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--jp-brand-color1);
+  background: var(--jp-brand-color4, rgba(0,120,212,0.1));
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-left: 4px;
+  vertical-align: middle;
+  line-height: 16px;
+}
+
 .hugr-cm-card-detail {
   font-size: var(--jp-ui-font-size0);
   color: var(--jp-ui-font-color2);

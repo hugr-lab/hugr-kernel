@@ -144,6 +144,23 @@ class ConnectionHandler(APIHandler):
         self.finish()
 
 
+class ConnectionDefaultHandler(APIHandler):
+    """PUT /hugr/connections/<name>/default — set a connection as default."""
+
+    @tornado.web.authenticated
+    def put(self, name: str):
+        cfg = _load_config()
+        conn = _find_connection(cfg, name)
+        if not conn:
+            self.set_status(404)
+            self.finish(json.dumps({"error": "not found"}))
+            return
+
+        cfg["default"] = name
+        _save_config(cfg)
+        self.finish(json.dumps({"ok": True, "default": name}))
+
+
 class ConnectionTestHandler(APIHandler):
     """POST /hugr/connections/<name>/test — test a named connection."""
 
@@ -195,6 +212,7 @@ def setup_handlers(web_app):
 
     web_app.add_handlers(host_pattern, [
         (route("connections"), ConnectionsHandler),
+        (route(r"connections/([^/]+)/default"), ConnectionDefaultHandler),
         (route(r"connections/([^/]+)/test"), ConnectionTestHandler),
         (route(r"connections/([^/]+)"), ConnectionHandler),
         (route("test"), TestHandler),

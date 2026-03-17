@@ -3,6 +3,7 @@
  */
 import { Widget } from '@lumino/widgets';
 import { LabIcon } from '@jupyterlab/ui-components';
+import { escapeHtml } from './utils';
 
 const BASE_URL = '/hugr';
 
@@ -22,6 +23,8 @@ export const hugrIcon = new LabIcon({
 const ICON_PLAY = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>`;
 const ICON_TRASH = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
 const ICON_PLUS = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+const ICON_STAR = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
+const ICON_STAR_FILLED = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
 
 function getXsrfToken(): string {
   const match = document.cookie.match(/(?:^|;\s*)_xsrf=([^;]*)/);
@@ -103,18 +106,29 @@ export class ConnectionManagerWidget extends Widget {
     }
 
     empty.style.display = 'none';
-    list.innerHTML = this._connections.map(c => `
-      <div class="hugr-cm-card" data-name="${c.name}">
+    list.innerHTML = this._connections.map(c => {
+      const isDefault = c.status === 'default';
+      return `
+      <div class="hugr-cm-card${isDefault ? ' hugr-cm-card-default' : ''}" data-name="${escapeHtml(c.name)}">
         <div class="hugr-cm-card-main">
-          <div class="hugr-cm-card-name">${c.read_only ? '<span class="hugr-cm-lock" title="Read-only">&#128274;</span>' : ''}${c.name}</div>
+          <div class="hugr-cm-card-name">${c.read_only ? '<span class="hugr-cm-lock" title="Read-only">&#128274;</span>' : ''}${escapeHtml(c.name)}${isDefault ? ' <span class="hugr-cm-badge-default">default</span>' : ''}</div>
           <div class="hugr-cm-card-actions">
-            <button class="hugr-cm-icon-btn hugr-btn-test-row" data-name="${c.name}" title="Test">${ICON_PLAY}</button>
-            ${c.read_only ? '' : `<button class="hugr-cm-icon-btn hugr-btn-del-row" data-name="${c.name}" title="Delete">${ICON_TRASH}</button>`}
+            ${isDefault ? '' : `<button class="hugr-cm-icon-btn hugr-btn-default-row" data-name="${escapeHtml(c.name)}" title="Set as default">${ICON_STAR}</button>`}
+            <button class="hugr-cm-icon-btn hugr-btn-test-row" data-name="${escapeHtml(c.name)}" title="Test">${ICON_PLAY}</button>
+            ${c.read_only ? '' : `<button class="hugr-cm-icon-btn hugr-btn-del-row" data-name="${escapeHtml(c.name)}" title="Delete">${ICON_TRASH}</button>`}
           </div>
         </div>
-        <div class="hugr-cm-card-detail">${c.url.replace(/^https?:\/\//, '')} &middot; ${c.auth_type}</div>
+        <div class="hugr-cm-card-detail">${escapeHtml(c.url.replace(/^https?:\/\//, ''))} &middot; ${escapeHtml(c.auth_type)}</div>
       </div>
-    `).join('');
+    `;
+    }).join('');
+
+    list.querySelectorAll('.hugr-btn-default-row').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const name = (e.currentTarget as HTMLElement).dataset.name;
+        if (name) this._setDefault(name);
+      });
+    });
 
     list.querySelectorAll('.hugr-btn-del-row').forEach(btn => {
       btn.addEventListener('click', (e) => {
@@ -232,8 +246,8 @@ export class ConnectionManagerWidget extends Widget {
         const resp = await fetch(`${BASE_URL}/test`, makeRequest('POST', body));
         const result = await resp.json();
         showMsg(result.ok
-          ? `<span class="hugr-cm-ok">v${result.version} (${result.cluster_mode ? 'cluster' : 'standalone'})</span>`
-          : `<span class="hugr-cm-err">${result.error}</span>`);
+          ? `<span class="hugr-cm-ok">v${escapeHtml(result.version)} (${result.cluster_mode ? 'cluster' : 'standalone'})</span>`
+          : `<span class="hugr-cm-err">${escapeHtml(result.error)}</span>`);
       } catch {
         showMsg('<span class="hugr-cm-err">Connection failed</span>');
       }
@@ -275,7 +289,7 @@ export class ConnectionManagerWidget extends Widget {
     overlay.innerHTML = `
       <div class="hugr-dlg hugr-dlg-sm">
         <div class="hugr-dlg-header">
-          <span>Test: ${name}</span>
+          <span>Test: ${escapeHtml(name)}</span>
           <button class="hugr-dlg-close">&times;</button>
         </div>
         <div class="hugr-dlg-body"><span class="hugr-cm-info">Testing...</span></div>
@@ -295,15 +309,24 @@ export class ConnectionManagerWidget extends Widget {
       const resp = await fetch(`${BASE_URL}/connections/${name}/test`, makeRequest('POST'));
       const result = await resp.json();
       bodyEl.innerHTML = result.ok
-        ? `<span class="hugr-cm-ok">v${result.version}</span>`
-        : `<span class="hugr-cm-err">${result.error}</span>`;
+        ? `<span class="hugr-cm-ok">v${escapeHtml(result.version)}</span>`
+        : `<span class="hugr-cm-err">${escapeHtml(result.error)}</span>`;
     } catch {
       bodyEl.innerHTML = '<span class="hugr-cm-err">Connection failed</span>';
     }
   }
 
+  private async _setDefault(name: string): Promise<void> {
+    try {
+      await fetch(`${BASE_URL}/connections/${name}/default`, makeRequest('PUT'));
+      await this._loadConnections();
+    } catch (e) {
+      console.error('Failed to set default connection', e);
+    }
+  }
+
   private async _deleteConnection(name: string): Promise<void> {
-    const confirmed = await this._showConfirm(`Delete "${name}"?`, 'This connection will be removed. Running kernels will keep using it until restarted.');
+    const confirmed = await this._showConfirm(`Delete "${escapeHtml(name)}"?`, 'This connection will be removed. Running kernels will keep using it until restarted.');
     if (!confirmed) return;
     try {
       await fetch(`${BASE_URL}/connections/${name}`, makeRequest('DELETE'));
@@ -320,7 +343,7 @@ export class ConnectionManagerWidget extends Widget {
     overlay.innerHTML = `
       <div class="hugr-dlg hugr-dlg-sm">
         <div class="hugr-dlg-header">
-          <span>${title}</span>
+          <span>${escapeHtml(title)}</span>
           <button class="hugr-dlg-close">&times;</button>
         </div>
         <div class="hugr-dlg-body">${bodyHtml}</div>
@@ -347,7 +370,7 @@ export class ConnectionManagerWidget extends Widget {
             <span>${title}</span>
             <button class="hugr-dlg-close">&times;</button>
           </div>
-          <div class="hugr-dlg-body"><p>${message}</p></div>
+          <div class="hugr-dlg-body"><p>${escapeHtml(message)}</p></div>
           <div class="hugr-dlg-footer">
             <button class="hugr-dlg-btn hugr-dlg-btn-cancel">Cancel</button>
             <button class="hugr-dlg-btn hugr-dlg-btn-danger">Delete</button>

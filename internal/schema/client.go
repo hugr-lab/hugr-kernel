@@ -2,19 +2,23 @@
 package schema
 
 import (
+	"container/list"
 	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/hugr-lab/hugr-kernel/internal/connection"
 	"github.com/hugr-lab/hugr-kernel/internal/debug"
 )
 
 const (
-	IntrospectionTTL = 30 * time.Minute
+	IntrospectionTTL = 10 * time.Minute
 	DefaultTimeout   = 2 * time.Second
+	MaxTypeCacheSize = 1000
 )
 
 // TypeRef represents a GraphQL type reference with wrapping.
@@ -68,12 +72,12 @@ type ArgInfo struct {
 }
 
 type FieldInfo struct {
-	Name              string  `json:"name"`
-	Description       string  `json:"description"`
-	Type              TypeRef `json:"type"`
+	Name              string    `json:"name"`
+	Description       string    `json:"description"`
+	Type              TypeRef   `json:"type"`
 	Args              []ArgInfo `json:"args"`
-	IsDeprecated      bool   `json:"isDeprecated"`
-	DeprecationReason string `json:"deprecationReason"`
+	IsDeprecated      bool      `json:"isDeprecated"`
+	DeprecationReason string    `json:"deprecationReason"`
 }
 
 type EnumValue struct {
@@ -123,27 +127,114 @@ func (e *cacheEntry[T]) expired() bool {
 	return time.Now().After(e.expiresAt)
 }
 
+// lruCache is a thread-safe LRU cache with TTL support.
+type lruCache[T any] struct {
+	mu       sync.Mutex
+	capacity int
+	items    map[string]*list.Element
+	order    *list.List // front = most recently used
+}
+
+type lruEntry[T any] struct {
+	key   string
+	entry *cacheEntry[T]
+}
+
+func newLRUCache[T any](capacity int) *lruCache[T] {
+	return &lruCache[T]{
+		capacity: capacity,
+		items:    make(map[string]*list.Element, capacity),
+		order:    list.New(),
+	}
+}
+
+// get returns the cached value if present and not expired.
+func (c *lruCache[T]) get(key string) (T, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	elem, ok := c.items[key]
+	if !ok {
+		var zero T
+		return zero, false
+	}
+	entry := elem.Value.(*lruEntry[T])
+	if entry.entry.expired() {
+		// Remove expired entry
+		c.order.Remove(elem)
+		delete(c.items, key)
+		var zero T
+		return zero, false
+	}
+	// Move to front (most recently used)
+	c.order.MoveToFront(elem)
+	return entry.entry.value, true
+}
+
+// put adds or updates a value in the cache, evicting LRU if at capacity.
+func (c *lruCache[T]) put(key string, value T, ttl time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if elem, ok := c.items[key]; ok {
+		// Update existing entry and move to front
+		entry := elem.Value.(*lruEntry[T])
+		entry.entry.value = value
+		entry.entry.expiresAt = time.Now().Add(ttl)
+		c.order.MoveToFront(elem)
+		return
+	}
+
+	// Evict LRU if at capacity
+	if c.order.Len() >= c.capacity {
+		back := c.order.Back()
+		if back != nil {
+			evicted := back.Value.(*lruEntry[T])
+			c.order.Remove(back)
+			delete(c.items, evicted.key)
+		}
+	}
+
+	elem := c.order.PushFront(&lruEntry[T]{
+		key: key,
+		entry: &cacheEntry[T]{
+			value:     value,
+			expiresAt: time.Now().Add(ttl),
+		},
+	})
+	c.items[key] = elem
+}
+
+// clear removes all entries.
+func (c *lruCache[T]) clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.items = make(map[string]*list.Element, c.capacity)
+	c.order.Init()
+}
+
 // Client provides cached GraphQL schema introspection.
 type Client struct {
 	mu         sync.RWMutex
-	typeCache  map[string]*cacheEntry[*TypeInfo]
+	typeCache  *lruCache[*TypeInfo]
 	roots      *cacheEntry[*RootTypes]
 	directives *cacheEntry[[]DirectiveInfo]
 	ttl        time.Duration
+	sfGroup    singleflight.Group
 }
 
 func NewClient() *Client {
 	return &Client{
-		typeCache: make(map[string]*cacheEntry[*TypeInfo]),
+		typeCache: newLRUCache[*TypeInfo](MaxTypeCacheSize),
 		ttl:       IntrospectionTTL,
 	}
 }
 
 // Invalidate clears all caches.
 func (c *Client) Invalidate() {
+	c.typeCache.clear()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.typeCache = make(map[string]*cacheEntry[*TypeInfo])
 	c.roots = nil
 	c.directives = nil
 }
@@ -162,113 +253,160 @@ func (c *Client) GetTypeFields(ctx context.Context, conn *connection.Connection,
 
 // GetType returns full type info, using cache when available.
 func (c *Client) GetType(ctx context.Context, conn *connection.Connection, typeName string) (*TypeInfo, error) {
-	c.mu.RLock()
-	if entry, ok := c.typeCache[typeName]; ok && !entry.expired() {
-		c.mu.RUnlock()
-		return entry.value, nil
+	// Check LRU cache first
+	if val, ok := c.typeCache.get(typeName); ok {
+		return val, nil
 	}
-	c.mu.RUnlock()
 
-	// Fetch from server
-	resp, err := conn.Query(ctx, typeQuery, map[string]any{"name": typeName})
+	// Use singleflight to deduplicate concurrent requests for the same type
+	key := "type:" + typeName
+	v, err, _ := c.sfGroup.Do(key, func() (any, error) {
+		// Double-check cache after winning the singleflight race
+		if val, ok := c.typeCache.get(typeName); ok {
+			return val, nil
+		}
+
+		resp, err := conn.Query(ctx, typeQuery, map[string]any{"name": typeName})
+		if err != nil {
+			return nil, fmt.Errorf("introspection query failed: %w", err)
+		}
+		defer resp.Close()
+		if resp.Err() != nil {
+			return nil, fmt.Errorf("introspection error: %w", resp.Err())
+		}
+
+		var ti TypeInfo
+		if err := resp.ScanData("__type", &ti); err != nil {
+			debug.Printf("[schema] ScanData __type failed for %s: %v", typeName, err)
+			return nil, nil
+		}
+
+		c.typeCache.put(typeName, &ti, c.ttl)
+		return &ti, nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("introspection query failed: %w", err)
+		return nil, err
 	}
-	defer resp.Close()
-	if resp.Err() != nil {
-		return nil, fmt.Errorf("introspection error: %w", resp.Err())
-	}
-
-	var ti TypeInfo
-	if err := resp.ScanData("__type", &ti); err != nil {
-		debug.Printf("[schema] ScanData __type failed for %s: %v", typeName, err)
+	if v == nil {
 		return nil, nil
 	}
-
-	c.mu.Lock()
-	c.typeCache[typeName] = &cacheEntry[*TypeInfo]{value: &ti, expiresAt: time.Now().Add(c.ttl)}
-	c.mu.Unlock()
-
-	return &ti, nil
+	return v.(*TypeInfo), nil
 }
 
 // GetRootTypes returns the root type names (Query, Mutation, Subscription).
 func (c *Client) GetRootTypes(ctx context.Context, conn *connection.Connection) (*RootTypes, error) {
 	c.mu.RLock()
 	if c.roots != nil && !c.roots.expired() {
+		val := c.roots.value
 		c.mu.RUnlock()
-		return c.roots.value, nil
+		return val, nil
 	}
 	c.mu.RUnlock()
 
-	resp, err := conn.Query(ctx, rootTypesQuery, nil)
+	// Use singleflight to deduplicate concurrent requests
+	v, err, _ := c.sfGroup.Do("roots", func() (any, error) {
+		// Double-check cache
+		c.mu.RLock()
+		if c.roots != nil && !c.roots.expired() {
+			val := c.roots.value
+			c.mu.RUnlock()
+			return val, nil
+		}
+		c.mu.RUnlock()
+
+		resp, err := conn.Query(ctx, rootTypesQuery, nil)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Close()
+		if resp.Err() != nil {
+			return nil, resp.Err()
+		}
+
+		var roots RootTypes
+		if err := resp.ScanData("__schema", &roots); err != nil {
+			return nil, err
+		}
+
+		c.mu.Lock()
+		c.roots = &cacheEntry[*RootTypes]{value: &roots, expiresAt: time.Now().Add(c.ttl)}
+		c.mu.Unlock()
+
+		return &roots, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Close()
-	if resp.Err() != nil {
-		return nil, resp.Err()
-	}
-
-	var roots RootTypes
-	if err := resp.ScanData("__schema", &roots); err != nil {
-		return nil, err
-	}
-
-	c.mu.Lock()
-	c.roots = &cacheEntry[*RootTypes]{value: &roots, expiresAt: time.Now().Add(c.ttl)}
-	c.mu.Unlock()
-
-	return &roots, nil
+	return v.(*RootTypes), nil
 }
 
 // GetDirectives returns all schema directives.
 func (c *Client) GetDirectives(ctx context.Context, conn *connection.Connection) ([]DirectiveInfo, error) {
 	c.mu.RLock()
 	if c.directives != nil && !c.directives.expired() {
+		val := c.directives.value
 		c.mu.RUnlock()
-		return c.directives.value, nil
+		return val, nil
 	}
 	c.mu.RUnlock()
 
-	resp, err := conn.Query(ctx, directivesQuery, nil)
+	// Use singleflight to deduplicate concurrent requests
+	v, err, _ := c.sfGroup.Do("directives", func() (any, error) {
+		// Double-check cache
+		c.mu.RLock()
+		if c.directives != nil && !c.directives.expired() {
+			val := c.directives.value
+			c.mu.RUnlock()
+			return val, nil
+		}
+		c.mu.RUnlock()
+
+		resp, err := conn.Query(ctx, directivesQuery, nil)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Close()
+		if resp.Err() != nil {
+			return nil, resp.Err()
+		}
+
+		// Parse __schema.directives
+		raw := resp.DataPart("__schema")
+		if raw == nil {
+			return nil, nil
+		}
+		schemaMap, ok := raw.(map[string]any)
+		if !ok {
+			return nil, nil
+		}
+		dirsRaw, ok := schemaMap["directives"]
+		if !ok {
+			return nil, nil
+		}
+
+		// Re-marshal and unmarshal to get typed directives
+		b, err := json.Marshal(dirsRaw)
+		if err != nil {
+			return nil, err
+		}
+		var dirs []DirectiveInfo
+		if err := json.Unmarshal(b, &dirs); err != nil {
+			return nil, err
+		}
+
+		c.mu.Lock()
+		c.directives = &cacheEntry[[]DirectiveInfo]{value: dirs, expiresAt: time.Now().Add(c.ttl)}
+		c.mu.Unlock()
+
+		return dirs, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Close()
-	if resp.Err() != nil {
-		return nil, resp.Err()
-	}
-
-	// Parse __schema.directives
-	raw := resp.DataPart("__schema")
-	if raw == nil {
+	if v == nil {
 		return nil, nil
 	}
-	schemaMap, ok := raw.(map[string]any)
-	if !ok {
-		return nil, nil
-	}
-	dirsRaw, ok := schemaMap["directives"]
-	if !ok {
-		return nil, nil
-	}
-
-	// Re-marshal and unmarshal to get typed directives
-	b, err := json.Marshal(dirsRaw)
-	if err != nil {
-		return nil, err
-	}
-	var dirs []DirectiveInfo
-	if err := json.Unmarshal(b, &dirs); err != nil {
-		return nil, err
-	}
-
-	c.mu.Lock()
-	c.directives = &cacheEntry[[]DirectiveInfo]{value: dirs, expiresAt: time.Now().Add(c.ttl)}
-	c.mu.Unlock()
-
-	return dirs, nil
+	return v.([]DirectiveInfo), nil
 }
 
 // ResolveFieldPath walks a field path (e.g., ["core", "catalog", "types"])

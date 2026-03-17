@@ -3,6 +3,7 @@
  */
 import { Widget } from '@lumino/widgets';
 import { CommClient } from '../commClient';
+import { escapeHtml } from '../utils';
 
 interface SchemaNode {
   id: string;
@@ -63,14 +64,14 @@ export class SchemaExplorerWidget extends Widget {
   private _renderNodes(nodes: SchemaNode[], indent = 0): string {
     return nodes.map(n => {
       const expandIcon = n.hasChildren ? (n.expanded ? '▼' : '▶') : ' ';
-      const desc = n.description ? ` <span class="hugr-node-desc">${n.description}</span>` : '';
+      const desc = n.description ? ` <span class="hugr-node-desc">${escapeHtml(n.description)}</span>` : '';
       const children = n.expanded && n.children?.length
         ? this._renderNodes(n.children, indent + 1)
         : '';
       return `
-        <div class="hugr-tree-node" data-id="${n.id}" style="padding-left:${indent * 16}px">
-          <span class="hugr-node-expand" data-id="${n.id}">${expandIcon}</span>
-          <span class="hugr-node-label">${n.label}</span>${desc}
+        <div class="hugr-tree-node" data-id="${escapeHtml(n.id)}" style="padding-left:${indent * 16}px">
+          <span class="hugr-node-expand" data-id="${escapeHtml(n.id)}">${expandIcon}</span>
+          <span class="hugr-node-label">${escapeHtml(n.label)}</span>${desc}
         </div>
         ${children}
       `;
@@ -133,7 +134,7 @@ export class SchemaExplorerWidget extends Widget {
           resultsEl.innerHTML = `<table class="hugr-type-table">
             <thead><tr><th>Name</th><th>Kind</th><th>Description</th></tr></thead>
             <tbody>${types.map((t: any) =>
-              `<tr><td>${t.name}</td><td>${t.kind}</td><td>${t.description || ''}</td></tr>`
+              `<tr><td>${escapeHtml(t.name)}</td><td>${escapeHtml(t.kind)}</td><td>${escapeHtml(t.description || '')}</td></tr>`
             ).join('')}</tbody>
           </table>`;
         }

@@ -9,7 +9,7 @@ import (
 	"github.com/hugr-lab/hugr-kernel/internal/schema"
 )
 
-const MaxCompletions = 5
+const MaxCompletions = 15
 
 // Item represents a single completion suggestion.
 type Item struct {
@@ -199,43 +199,11 @@ func (c *Completer) completeArgumentValues(ctx context.Context, conn *connection
 // e.g., for path=["filter"], it finds the "filter" arg type's input fields.
 // For path=["filter","name"], it finds filter type, then name field's type, and returns its fields.
 func (c *Completer) completeInputPath(ctx context.Context, conn *connection.Connection, args []schema.ArgInfo, inputPath []string) []Item {
-	if len(inputPath) == 0 || len(args) == 0 {
+	ti, err := schema.ResolveInputType(ctx, c.Schema, conn, args, inputPath)
+	if err != nil || ti == nil {
 		return nil
 	}
-
-	// First element of inputPath is the argument name
-	argName := inputPath[0]
-	var currentTypeName string
-	for _, arg := range args {
-		if arg.Name == argName {
-			currentTypeName = arg.Type.UnwrapName()
-			break
-		}
-	}
-	if currentTypeName == "" {
-		return nil
-	}
-
-	// Walk remaining path through input fields
-	for _, fieldName := range inputPath[1:] {
-		ti, err := c.Schema.GetType(ctx, conn, currentTypeName)
-		if err != nil || ti == nil {
-			return nil
-		}
-		found := false
-		for _, f := range ti.InputFields {
-			if f.Name == fieldName {
-				currentTypeName = f.Type.UnwrapName()
-				found = true
-				break
-			}
-		}
-		if !found {
-			return nil
-		}
-	}
-
-	return c.completeInputType(ctx, conn, currentTypeName)
+	return c.completeInputTypeFromInfo(ti)
 }
 
 // completeInputType returns completion items for the fields/values of an input type.
@@ -249,6 +217,11 @@ func (c *Completer) completeInputType(ctx context.Context, conn *connection.Conn
 		return nil
 	}
 
+	return c.completeInputTypeFromInfo(ti)
+}
+
+// completeInputTypeFromInfo returns completion items from an already-resolved TypeInfo.
+func (c *Completer) completeInputTypeFromInfo(ti *schema.TypeInfo) []Item {
 	switch ti.Kind {
 	case "INPUT_OBJECT":
 		items := make([]Item, 0, len(ti.InputFields))
@@ -268,7 +241,7 @@ func (c *Completer) completeInputType(ctx context.Context, conn *connection.Conn
 			items = append(items, Item{
 				Label:         ev.Name,
 				Kind:          "EnumValue",
-				Detail:        typeName,
+				Detail:        ti.Name,
 				Documentation: ev.Description,
 				InsertText:    ev.Name,
 			})

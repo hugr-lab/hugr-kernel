@@ -3,6 +3,7 @@
  */
 import { Widget } from '@lumino/widgets';
 import { CommClient } from '../commClient';
+import { escapeHtml } from '../utils';
 
 export class DetailModal extends Widget {
   private _commClient: CommClient;
@@ -32,24 +33,24 @@ export class DetailModal extends Widget {
     const desc = detail.description || '';
 
     let html = `<div class="hugr-detail">
-      <h3>${name} <span class="hugr-detail-kind">${kind}</span></h3>
-      ${desc ? `<p>${desc}</p>` : ''}
+      <h3>${escapeHtml(name)} <span class="hugr-detail-kind">${escapeHtml(kind)}</span></h3>
+      ${desc ? `<p>${escapeHtml(desc)}</p>` : ''}
     `;
 
     const sections = detail.sections || [];
     for (const section of sections) {
-      html += `<h4>${section.title}</h4>`;
+      html += `<h4>${escapeHtml(section.title)}</h4>`;
 
       if (section.kind === 'Table' && section.columns && section.rows) {
         html += '<table class="hugr-detail-table"><thead><tr>';
         for (const col of section.columns) {
-          html += `<th>${col}</th>`;
+          html += `<th>${escapeHtml(col)}</th>`;
         }
         html += '</tr></thead><tbody>';
         for (const row of section.rows) {
           html += '<tr>';
           for (const cell of row) {
-            html += `<td>${cell ?? ''}</td>`;
+            html += `<td>${escapeHtml(String(cell ?? ''))}</td>`;
           }
           html += '</tr>';
         }
@@ -57,13 +58,13 @@ export class DetailModal extends Widget {
       } else if (section.kind === 'List' && section.items) {
         html += '<ul>';
         for (const item of section.items) {
-          html += `<li>${item}</li>`;
+          html += `<li>${escapeHtml(item)}</li>`;
         }
         html += '</ul>';
       } else if (section.kind === 'Text' && section.content) {
-        html += `<p>${section.content}</p>`;
+        html += `<p>${escapeHtml(section.content)}</p>`;
       } else if (section.kind === 'Code' && section.content) {
-        html += `<pre><code>${section.content}</code></pre>`;
+        html += `<pre><code>${escapeHtml(section.content)}</code></pre>`;
       }
     }
 
