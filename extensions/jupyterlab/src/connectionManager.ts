@@ -347,28 +347,6 @@ export class ConnectionManagerWidget extends Widget {
     }
   }
 
-  /** Show a simple alert dialog with title and HTML body. */
-  private _showAlert(title: string, bodyHtml: string): void {
-    const overlay = document.createElement('div');
-    overlay.className = 'hugr-dlg-overlay';
-    overlay.innerHTML = `
-      <div class="hugr-dlg hugr-dlg-sm">
-        <div class="hugr-dlg-header">
-          <span>${escapeHtml(title)}</span>
-          <button class="hugr-dlg-close">&times;</button>
-        </div>
-        <div class="hugr-dlg-body">${bodyHtml}</div>
-        <div class="hugr-dlg-footer">
-          <button class="hugr-dlg-btn hugr-dlg-btn-save">OK</button>
-        </div>
-      </div>
-    `;
-    const close = () => overlay.remove();
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-    overlay.querySelector('.hugr-dlg-close')?.addEventListener('click', close);
-    overlay.querySelector('.hugr-dlg-btn-save')?.addEventListener('click', close);
-    document.body.appendChild(overlay);
-  }
 
   /** Show a confirm dialog. Returns true if user clicks Delete, false on Cancel. */
   private _showConfirm(title: string, message: string): Promise<boolean> {
@@ -388,7 +366,13 @@ export class ConnectionManagerWidget extends Widget {
           </div>
         </div>
       `;
-      const close = (result: boolean) => { overlay.remove(); resolve(result); };
+      const close = (result: boolean) => {
+        document.removeEventListener('keydown', onKeyDown);
+        overlay.remove();
+        resolve(result);
+      };
+      const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') close(false); };
+      document.addEventListener('keydown', onKeyDown);
       overlay.addEventListener('click', (e) => { if (e.target === overlay) close(false); });
       overlay.querySelector('.hugr-dlg-close')?.addEventListener('click', () => close(false));
       overlay.querySelector('.hugr-dlg-btn-cancel')?.addEventListener('click', () => close(false));

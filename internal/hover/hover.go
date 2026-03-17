@@ -254,5 +254,12 @@ func typeLink(displayText, typeName string) string {
 	if typeName == "" || strings.HasPrefix(typeName, "__") {
 		return "`" + displayText + "`"
 	}
+	// Sanitize: GraphQL type names are [a-zA-Z_][a-zA-Z0-9_]* per spec.
+	// Guard against markdown injection from unexpected characters.
+	for _, ch := range typeName {
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_') {
+			return "`" + displayText + "`"
+		}
+	}
 	return "[`" + displayText + "`](hugr-type:" + typeName + ")"
 }

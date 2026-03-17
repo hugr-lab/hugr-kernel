@@ -97,6 +97,13 @@ func TestResolveCursorContext(t *testing.T) {
 			wantArg:  "order_by",
 			wantInput: []string{"direction"},
 		},
+		{
+			name:     "empty list value",
+			code:     "{\n    core{\n        catalog{\n            catalogs(order_by: [",
+			wantKind: ContextArgumentValue,
+			wantPF:   "catalogs",
+			wantArg:  "order_by",
+		},
 	}
 
 	for _, tt := range tests {

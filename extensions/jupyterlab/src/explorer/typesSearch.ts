@@ -33,7 +33,6 @@ export class TypesSearchSection {
   // State
   private _query = '';
   private _kindFilter = '';
-  private _hugrTypeFilter = '';
   private _semanticSearch = false;
   private _page = 0;
   private _totalCount = 0;
@@ -41,8 +40,9 @@ export class TypesSearchSection {
   private _loading = false;
   private _semanticAvailable = true;
 
-  // Debounce
+  // Debounce & race guard
   private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private _searchVersion = 0;
 
   // Persistent DOM references
   private _searchInput: HTMLInputElement | null = null;
@@ -64,7 +64,6 @@ export class TypesSearchSection {
     this._client = client;
     this._query = '';
     this._kindFilter = '';
-    this._hugrTypeFilter = '';
     this._semanticSearch = false;
     this._page = 0;
     this._totalCount = 0;
@@ -348,6 +347,7 @@ export class TypesSearchSection {
       return;
     }
 
+    const version = ++this._searchVersion;
     this._loading = true;
     this._renderResults();
 
@@ -361,6 +361,11 @@ export class TypesSearchSection {
       console.error('Types search error:', err);
       this._results = [];
       this._totalCount = 0;
+    }
+
+    // Discard stale results if a newer search was started
+    if (version !== this._searchVersion) {
+      return;
     }
 
     this._loading = false;

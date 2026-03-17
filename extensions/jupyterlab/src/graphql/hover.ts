@@ -61,9 +61,18 @@ export async function graphqlHoverSource(
   }
 }
 
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 function markdownToHtml(md: string): string {
-  return md
-    // Markdown links first: [`text`](hugr-type:X) or [text](hugr-type:X)
+  // Escape HTML entities first to prevent XSS, then apply markdown transforms
+  return escapeHtml(md)
+    // Markdown links: [`text`](hugr-type:X) or [text](hugr-type:X)
     .replace(/\[`(.+?)`\]\((hugr-type:[^)]+)\)/g,
       '<a href="$2" class="hugr-type-link"><code>$1</code></a>')
     .replace(/\[(.+?)\]\((hugr-type:[^)]+)\)/g,

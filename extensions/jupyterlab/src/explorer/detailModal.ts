@@ -7,9 +7,7 @@
 import { HugrClient } from '../hugrClient';
 import { escapeHtml } from '../utils';
 import { kindIcon, hugrTypeIcon } from './icons';
-import { createGrid, GridApi, GridOptions, ModuleRegistry, AllCommunityModule } from 'ag-grid-community';
-
-ModuleRegistry.registerModules([AllCommunityModule]);
+import { createGrid, GridApi, GridOptions } from 'ag-grid-community';
 
 // ---------------------------------------------------------------------------
 // Introspection query with Hugr extensions
@@ -320,6 +318,14 @@ export function showDetailModal(
       removeOverlay(overlay);
     }
   });
+
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      document.removeEventListener('keydown', onKeyDown);
+      removeOverlay(overlay);
+    }
+  };
+  document.addEventListener('keydown', onKeyDown);
 
   const header = createHeader(escapeHtml(typeName), overlay);
   const body = document.createElement('div');

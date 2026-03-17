@@ -128,6 +128,8 @@ export class SchemaTreeSection {
   private _client: HugrClient | null = null;
   private _roots: SchemaTreeNode[] = [];
   private _error: string | null = null;
+  private _activeTooltips: HTMLElement[] = [];
+  private _activeTimers: ReturnType<typeof setTimeout>[] = [];
 
   constructor(container: HTMLElement, onShowDetail: (typeName: string) => void) {
     this._container = container;
@@ -139,6 +141,7 @@ export class SchemaTreeSection {
   // -----------------------------------------------------------------------
 
   setClient(client: HugrClient | null): void {
+    this._cleanupTooltips();
     this._client = client;
     this._roots = [];
     this._error = null;
@@ -612,7 +615,7 @@ export class SchemaTreeSection {
       badge.style.cssText =
         `margin-left:6px;padding:0 4px;border-radius:3px;font-size:10px;` +
         `line-height:16px;background:${bgColor}22;color:${bgColor};flex-shrink:0;`;
-      badge.textContent = escapeHtml(badgeLabel);
+      badge.textContent = badgeLabel;
       row.appendChild(badge);
     }
 
@@ -762,6 +765,7 @@ export class SchemaTreeSection {
       tooltip.style.left = `${rect.left}px`;
       tooltip.style.top = `${rect.bottom + 4}px`;
       document.body.appendChild(tooltip);
+      this._activeTooltips.push(tooltip);
 
       // Prevent tooltip from disappearing when hovering over it
       tooltip.addEventListener('mouseenter', () => {
@@ -773,7 +777,7 @@ export class SchemaTreeSection {
 
       // Fetch type info
       if (this._client) {
-        const query = `{ __type(name: "${typeName}") { name kind description } }`;
+        const query = `{ __type(name: ${JSON.stringify(typeName)}) { name kind description } }`;
         this._client.query(query).then((resp) => {
           if (!tooltip) return;
           const t = resp.data?.__type;
@@ -808,16 +812,33 @@ export class SchemaTreeSection {
     };
 
     const hide = () => {
-      hideTimer = setTimeout(() => {
+      const timer = setTimeout(() => {
         if (tooltip && tooltip.parentNode) {
           tooltip.parentNode.removeChild(tooltip);
+          const idx = this._activeTooltips.indexOf(tooltip);
+          if (idx >= 0) this._activeTooltips.splice(idx, 1);
         }
         tooltip = null;
         hideTimer = null;
       }, 200);
+      hideTimer = timer;
+      this._activeTimers.push(timer);
     };
 
     el.addEventListener('mouseenter', show);
     el.addEventListener('mouseleave', hide);
+  }
+
+  private _cleanupTooltips(): void {
+    for (const timer of this._activeTimers) {
+      clearTimeout(timer);
+    }
+    this._activeTimers = [];
+    for (const el of this._activeTooltips) {
+      if (el.parentNode) {
+        el.parentNode.removeChild(el);
+      }
+    }
+    this._activeTooltips = [];
   }
 }
