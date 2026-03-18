@@ -6,8 +6,8 @@ require (
 	github.com/apache/arrow-go/v18 v18.5.2
 	github.com/go-zeromq/zmq4 v0.17.0
 	github.com/google/uuid v1.6.0
-	github.com/hugr-lab/query-engine/client v0.3.6
-	github.com/hugr-lab/query-engine/types v0.3.6
+	github.com/hugr-lab/query-engine/client v0.3.7
+	github.com/hugr-lab/query-engine/types v0.3.7
 	github.com/vektah/gqlparser/v2 v2.5.32
 	golang.org/x/sync v0.19.0
 )
