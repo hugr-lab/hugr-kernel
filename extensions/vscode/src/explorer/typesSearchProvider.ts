@@ -7,7 +7,7 @@
  */
 import * as vscode from 'vscode';
 import { HugrClient } from './hugrClient';
-import { kindIconSvg, kindColor, hugrTypeColor, hugrTypeLabel } from './icons';
+import { kindIconSvg, kindColor, hugrTypeColor, hugrTypeLabel, KIND_LABELS } from './icons';
 
 const PAGE_SIZE = 15;
 
@@ -128,25 +128,32 @@ export class TypesSearchProvider implements vscode.WebviewViewProvider {
     this._loading = false;
     this._postMessage({
       command: 'results',
-      results: this._results.map(r => ({
+      results: this._results.map(r => {
+        // Validate kind against known values to prevent SVG injection
+        const safeKind = (r.kind && r.kind in KIND_LABELS) ? r.kind : '';
+        return {
         name: r.name || '',
-        kind: r.kind || '',
-        kindIcon: kindIconSvg(r.kind || ''),
+        kind: safeKind,
+        kindIcon: kindIconSvg(safeKind),
         description: r.description || '',
         hugrType: r.hugr_type || '',
         hugrTypeLabel: r.hugr_type ? hugrTypeLabel(r.hugr_type) : '',
         hugrTypeColor: r.hugr_type ? hugrTypeColor(r.hugr_type) : '',
         module: r.module || '',
         fieldCount: r.fields_aggregation?._rows_count ?? '',
-      })),
+      }; }),
       totalCount: this._totalCount,
       page: this._page,
       pageSize: PAGE_SIZE,
     });
   }
 
+  private _escapeGraphqlString(raw: string): string {
+    return raw.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  }
+
   private _buildIlikePattern(raw: string): string {
-    const escaped = raw.replace(/"/g, '\\"');
+    const escaped = this._escapeGraphqlString(raw);
     if (raw.includes('*')) {
       return escaped.replace(/\*/g, '%');
     }
@@ -162,7 +169,7 @@ export class TypesSearchProvider implements vscode.WebviewViewProvider {
       filterParts.push(`name: { ilike: "${pattern}" }`);
     }
     if (this._kindFilter) {
-      filterParts.push(`kind: { eq: "${this._kindFilter}" }`);
+      filterParts.push(`kind: { eq: "${this._escapeGraphqlString(this._kindFilter)}" }`);
     }
 
     const filterClause = filterParts.length > 0
@@ -200,12 +207,12 @@ export class TypesSearchProvider implements vscode.WebviewViewProvider {
   private async _semanticSearchQuery(): Promise<void> {
     if (!this._client) return;
 
-    const escaped = this._query.replace(/"/g, '\\"');
+    const escaped = this._escapeGraphqlString(this._query);
     const offset = this._page * PAGE_SIZE;
 
     const filterParts: string[] = [];
     if (this._kindFilter) {
-      filterParts.push(`kind: {eq: "${this._kindFilter}"}`);
+      filterParts.push(`kind: {eq: "${this._escapeGraphqlString(this._kindFilter)}"}`);
     }
     const filterClause = filterParts.length > 0
       ? `filter: {${filterParts.join(', ')}}`
@@ -263,12 +270,14 @@ export class TypesSearchProvider implements vscode.WebviewViewProvider {
   }
 
   private _getHtml(): string {
+    const nonce = getNonce();
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; img-src data:;">
+<style nonce="${nonce}">
   body {
     font-family: var(--vscode-font-family, sans-serif);
     font-size: 12px;
@@ -357,7 +366,7 @@ export class TypesSearchProvider implements vscode.WebviewViewProvider {
   </div>
   <div id="pagination" class="pagination" style="display:none"></div>
 
-  <script>
+  <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const searchInput = document.getElementById('searchInput');
     const kindFilter = document.getElementById('kindFilter');
@@ -468,4 +477,13 @@ export class TypesSearchProvider implements vscode.WebviewViewProvider {
   private _escAttr(text: string): string {
     return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
+}
+
+function getNonce(): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let nonce = '';
+  for (let i = 0; i < 32; i++) {
+    nonce += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return nonce;
 }

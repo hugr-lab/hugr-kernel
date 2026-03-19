@@ -135,24 +135,6 @@ function parseMultipartBinary(raw: Buffer): Array<{
   return parts;
 }
 
-/**
- * Recursively convert all BigInt values to Number.
- * Arrow IPC returns BigInt for integer columns which breaks JSON.stringify.
- */
-function sanitizeBigInt(val: any): any {
-  if (typeof val === 'bigint') return Number(val);
-  if (val === null || val === undefined) return val;
-  if (Array.isArray(val)) return val.map(sanitizeBigInt);
-  if (typeof val === 'object') {
-    const out: Record<string, any> = {};
-    for (const key of Object.keys(val)) {
-      out[key] = sanitizeBigInt(val[key]);
-    }
-    return out;
-  }
-  return val;
-}
-
 export class HugrClient {
   private _url: string;
   private _authType: 'public' | 'api_key' | 'bearer';

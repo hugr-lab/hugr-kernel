@@ -83,6 +83,37 @@ function esc(text: string): string {
 let _panel: vscode.WebviewPanel | null = null;
 let _currentClient: HugrClient | null = null;
 let _history: string[] = [];
+let _loadVersion = 0;
+/** The current type name being displayed (without @ prefix). */
+let _currentTypeName = '';
+
+function _ensurePanel(title: string): void {
+  if (_panel) return;
+
+  _panel = vscode.window.createWebviewPanel(
+    'hugrTypeDetail',
+    title,
+    vscode.ViewColumn.Beside,
+    { enableScripts: true, retainContextWhenHidden: true },
+  );
+  _panel.onDidDispose(() => {
+    _panel = null;
+    _history = [];
+    _currentTypeName = '';
+  });
+
+  _panel.webview.onDidReceiveMessage((msg) => {
+    if (msg.command === 'showType' && msg.typeName && _currentClient) {
+      showTypeDetail(msg.typeName, _currentClient);
+    }
+    if (msg.command === 'goBack' && _currentClient) {
+      if (_history.length > 0) {
+        const prev = _history.pop()!;
+        showTypeDetail(prev, _currentClient, false);
+      }
+    }
+  });
+}
 
 export function showTypeDetail(
   typeName: string,
@@ -90,39 +121,20 @@ export function showTypeDetail(
   addToHistory = true
 ): void {
   _currentClient = client;
+  _ensurePanel(typeName);
 
-  if (!_panel) {
-    _panel = vscode.window.createWebviewPanel(
-      'hugrTypeDetail',
-      typeName,
-      vscode.ViewColumn.Beside,
-      { enableScripts: true, retainContextWhenHidden: true },
-    );
-    _panel.onDidDispose(() => { _panel = null; _history = []; });
-
-    _panel.webview.onDidReceiveMessage((msg) => {
-      if (msg.command === 'showType' && msg.typeName && _currentClient) {
-        showTypeDetail(msg.typeName, _currentClient);
-      }
-      if (msg.command === 'goBack' && _currentClient) {
-        if (_history.length > 0) {
-          const prev = _history.pop()!;
-          showTypeDetail(prev, _currentClient, false);
-        }
-      }
-    });
+  // Track history using actual type name (not panel title)
+  if (addToHistory && _currentTypeName && _currentTypeName !== typeName) {
+    _history.push(_currentTypeName);
   }
 
-  // Track history — save current title before navigating (unless going back)
-  if (addToHistory && _panel.title && _panel.title !== typeName) {
-    _history.push(_panel.title);
-  }
+  _currentTypeName = typeName;
+  _panel!.title = typeName;
+  _panel!.webview.html = loadingHtml(typeName, _history.length > 0);
 
-  _panel.title = typeName;
-  _panel.webview.html = loadingHtml(typeName, _history.length > 0);
-
+  const version = ++_loadVersion;
   loadTypeDetail(typeName, client).then(html => {
-    if (_panel) {
+    if (_panel && version === _loadVersion) {
       _panel.webview.html = html;
     }
   });
@@ -134,35 +146,17 @@ export function showDirectiveDetail(
 ): void {
   _currentClient = client;
   _history = [];
+  _currentTypeName = '';
   const displayName = directiveName.startsWith('@') ? directiveName : `@${directiveName}`;
 
-  if (!_panel) {
-    _panel = vscode.window.createWebviewPanel(
-      'hugrTypeDetail',
-      displayName,
-      vscode.ViewColumn.Beside,
-      { enableScripts: true, retainContextWhenHidden: true },
-    );
-    _panel.onDidDispose(() => { _panel = null; _history = []; });
+  _ensurePanel(displayName);
 
-    _panel.webview.onDidReceiveMessage((msg) => {
-      if (msg.command === 'showType' && msg.typeName && _currentClient) {
-        showTypeDetail(msg.typeName, _currentClient);
-      }
-      if (msg.command === 'goBack' && _currentClient) {
-        if (_history.length > 0) {
-          const prev = _history.pop()!;
-          showTypeDetail(prev, _currentClient, false);
-        }
-      }
-    });
-  }
+  _panel!.title = displayName;
+  _panel!.webview.html = loadingHtml(displayName, false);
 
-  _panel.title = displayName;
-  _panel.webview.html = loadingHtml(displayName, false);
-
+  const version = ++_loadVersion;
   loadDirectiveDetail(directiveName, client).then(html => {
-    if (_panel) {
+    if (_panel && version === _loadVersion) {
       _panel.webview.html = html;
     }
   });
@@ -422,13 +416,15 @@ function wrapHtml(title: string, body: string, hasHistory = false): string {
   const backBtn = hasHistory
     ? `<a href="#" class="back-btn" id="backBtn">\u2190 Back</a>`
     : '';
+  const nonce = getNonce();
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; img-src data:;">
+<style nonce="${nonce}">
   body {
     font-family: var(--vscode-font-family, sans-serif);
     font-size: var(--vscode-font-size, 13px);
@@ -498,7 +494,7 @@ function wrapHtml(title: string, body: string, hasHistory = false): string {
 <body>
   <div class="header-row">${backBtn}<h2>${title}</h2></div>
   ${body}
-  <script>
+  <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     document.addEventListener('click', (e) => {
       const link = e.target.closest('.type-link');
@@ -518,4 +514,13 @@ function wrapHtml(title: string, body: string, hasHistory = false): string {
   </script>
 </body>
 </html>`;
+}
+
+function getNonce(): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let nonce = '';
+  for (let i = 0; i < 32; i++) {
+    nonce += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return nonce;
 }

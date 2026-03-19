@@ -5,7 +5,6 @@
  * VS Code TreeItem.iconPath.
  */
 import * as vscode from 'vscode';
-import * as path from 'path';
 
 // ---------------------------------------------------------------------------
 // Icon file mapping: GraphQL kind → SVG filename
