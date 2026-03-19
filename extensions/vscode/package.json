@@ -2,7 +2,7 @@
   "name": "hugr-graphql-ide",
   "displayName": "Hugr GraphQL IDE",
   "version": "0.1.0",
-  "description": "GraphQL IDE for Hugr — connections, completion, hover, diagnostics in VS Code notebooks",
+  "description": "GraphQL IDE for Hugr — connections, schema explorer, type search, and diagnostics in VS Code notebooks",
   "publisher": "hugr-lab",
   "license": "MIT",
   "repository": {
@@ -13,7 +13,10 @@
   "engines": {
     "vscode": "^1.80.0"
   },
-  "categories": ["Programming Languages", "Notebooks"],
+  "categories": [
+    "Programming Languages",
+    "Notebooks"
+  ],
   "activationEvents": [
     "onNotebook:jupyter-notebook",
     "onView:hugr.connections"
@@ -46,12 +49,17 @@
           "name": "Connections"
         },
         {
-          "id": "hugr.catalog",
-          "name": "Catalog Explorer"
+          "id": "hugr.schema",
+          "name": "Schema"
         },
         {
-          "id": "hugr.schema",
-          "name": "Schema Explorer"
+          "id": "hugr.types",
+          "name": "Types",
+          "type": "webview"
+        },
+        {
+          "id": "hugr.directives",
+          "name": "Directives"
         }
       ]
     },
@@ -93,14 +101,32 @@
         "category": "Hugr"
       },
       {
-        "command": "hugr.refreshCatalog",
-        "title": "Refresh Catalog",
+        "command": "hugr.refreshSchema",
+        "title": "Refresh Schema",
         "icon": "$(refresh)",
         "category": "Hugr"
       },
       {
-        "command": "hugr.refreshSchema",
-        "title": "Refresh Schema",
+        "command": "hugr.refreshDirectives",
+        "title": "Refresh Directives",
+        "icon": "$(refresh)",
+        "category": "Hugr"
+      },
+      {
+        "command": "hugr.showTypeDetail",
+        "title": "Show Type Detail",
+        "icon": "$(info)",
+        "category": "Hugr"
+      },
+      {
+        "command": "hugr.searchType",
+        "title": "Search in Types",
+        "icon": "$(search)",
+        "category": "Hugr"
+      },
+      {
+        "command": "hugr.refreshSchemaNode",
+        "title": "Refresh",
         "icon": "$(refresh)",
         "category": "Hugr"
       }
@@ -118,13 +144,13 @@
           "group": "navigation"
         },
         {
-          "command": "hugr.refreshCatalog",
-          "when": "view == hugr.catalog",
+          "command": "hugr.refreshSchema",
+          "when": "view == hugr.schema",
           "group": "navigation"
         },
         {
-          "command": "hugr.refreshSchema",
-          "when": "view == hugr.schema",
+          "command": "hugr.refreshDirectives",
+          "when": "view == hugr.directives",
           "group": "navigation"
         }
       ],
@@ -148,8 +174,31 @@
           "command": "hugr.removeConnection",
           "when": "view == hugr.connections",
           "group": "1_edit@2"
+        },
+        {
+          "command": "hugr.showTypeDetail",
+          "when": "view == hugr.schema && viewItem =~ /hasTypeName/",
+          "group": "inline@1"
+        },
+        {
+          "command": "hugr.refreshSchemaNode",
+          "when": "view == hugr.schema && viewItem =~ /expandable/",
+          "group": "inline@2"
+        },
+        {
+          "command": "hugr.searchType",
+          "when": "view == hugr.schema && viewItem =~ /hasTypeName/",
+          "group": "1_nav@1"
+        },
+        {
+          "command": "hugr.showTypeDetail",
+          "when": "view == hugr.directives && viewItem == directive",
+          "group": "inline@1"
         }
       ]
     }
+  },
+  "dependencies": {
+    "apache-arrow": "^21.1.0"
   }
 }

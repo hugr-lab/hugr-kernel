@@ -3,17 +3,26 @@
  *
  * Provides:
  * - Connection manager (read/write ~/.hugr/connections.json)
- * - Catalog and Schema explorer stubs (TODO: comm protocol)
+ * - Schema explorer with lazy-loading tree
+ * - Types search with pagination
+ * - Directives list
+ * - Type/directive detail panels
  *
  * Completion is handled by the Jupyter extension via kernel protocol
  * (complete_request).
  */
 import * as vscode from 'vscode';
 import { ConnectionTreeProvider } from './connectionTreeProvider';
-import { LogicalTreeProvider } from './explorer/logicalTreeProvider';
-import { SchemaTreeProvider } from './explorer/schemaTreeProvider';
+import { SchemaTreeProvider, SchemaTreeNode } from './explorer/schemaTreeProvider';
+import { DirectivesTreeProvider } from './explorer/directivesTreeProvider';
+import { TypesSearchProvider } from './explorer/typesSearchProvider';
+import { showTypeDetail, showDirectiveDetail } from './explorer/detailPanel';
+import { setExtensionUri } from './explorer/icons';
 
 export function activate(context: vscode.ExtensionContext): void {
+  // Set extension URI for icon resolution
+  setExtensionUri(context.extensionUri);
+
   // --- Jupyter kernel completion trigger characters for GraphQL ---
   const config = vscode.workspace.getConfiguration('jupyter');
   const triggers = config.get<Record<string, string[]>>('completionTriggerCharacters') || {};
@@ -36,15 +45,78 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('hugr.refreshConnections', () => connectionProvider.refresh()),
   );
 
-  // --- Explorer (stubs) ---
-  const catalogProvider = new LogicalTreeProvider();
-  vscode.window.registerTreeDataProvider('hugr.catalog', catalogProvider);
+  // --- Schema Tree ---
   const schemaProvider = new SchemaTreeProvider();
   vscode.window.registerTreeDataProvider('hugr.schema', schemaProvider);
 
+  // --- Directives ---
+  const directivesProvider = new DirectivesTreeProvider();
+  vscode.window.registerTreeDataProvider('hugr.directives', directivesProvider);
+
+  // --- Types Search ---
+  const typesSearchProvider = new TypesSearchProvider(
+    context.extensionUri,
+    (typeName: string) => {
+      const client = connectionProvider.createClient();
+      if (client) {
+        showTypeDetail(typeName, client);
+      }
+    },
+  );
   context.subscriptions.push(
-    vscode.commands.registerCommand('hugr.refreshCatalog', () => catalogProvider.refresh()),
+    vscode.window.registerWebviewViewProvider('hugr.types', typesSearchProvider),
+  );
+
+  // --- Connection change handler ---
+  const updateProvidersClient = () => {
+    const client = connectionProvider.createClient();
+    schemaProvider.setClient(client);
+    directivesProvider.setClient(client);
+    typesSearchProvider.setClient(client);
+  };
+
+  // Subscribe to default connection changes
+  context.subscriptions.push(
+    connectionProvider.onDidChangeDefault(() => {
+      updateProvidersClient();
+    }),
+  );
+
+  // Initialize with current default connection
+  updateProvidersClient();
+
+  // --- Commands ---
+  context.subscriptions.push(
     vscode.commands.registerCommand('hugr.refreshSchema', () => schemaProvider.refresh()),
+    vscode.commands.registerCommand('hugr.refreshDirectives', () => directivesProvider.refresh()),
+
+    vscode.commands.registerCommand('hugr.refreshSchemaNode', (node: SchemaTreeNode) => {
+      schemaProvider.refreshNode(node);
+    }),
+
+    vscode.commands.registerCommand('hugr.showTypeDetail', (nodeOrName: SchemaTreeNode | string) => {
+      const client = connectionProvider.createClient();
+      if (!client) {
+        vscode.window.showWarningMessage('No connection available');
+        return;
+      }
+      const typeName = typeof nodeOrName === 'string'
+        ? nodeOrName
+        : nodeOrName?.typeName;
+      if (typeName) {
+        showTypeDetail(typeName, client);
+      }
+    }),
+
+    vscode.commands.registerCommand('hugr.searchType', (nodeOrName: SchemaTreeNode | string) => {
+      const typeName = typeof nodeOrName === 'string'
+        ? nodeOrName
+        : nodeOrName?.typeName;
+      if (typeName) {
+        typesSearchProvider.searchFor(typeName);
+        vscode.commands.executeCommand('hugr.types.focus');
+      }
+    }),
   );
 }
 
