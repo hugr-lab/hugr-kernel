@@ -67,3 +67,10 @@ internal/renderer/table.go       # ASCII table fallback
 | Query Engine & Go Client | ~/projects/hugr-lab/query-engine/ |
 | DuckDB Kernel (reference) | ~/projects/hugr-lab/duckdb-kernel/ |
 | Docs Site | ~/projects/hugr-lab/hugr-lab.github.io/ |
+
+## Active Technologies
+- TypeScript 5.x (JupyterLab extension), Python 3.11 (server extension), Go 1.26.1 (kernel — minimal changes) + `@jupyterlab/application`, `@lumino/widgets`, webpack 5, tornado (server proxy) (006-hugr-explorer)
+- `~/.hugr/connections.json` (existing, no changes) (006-hugr-explorer)
+
+## Recent Changes
+- 006-hugr-explorer: Added TypeScript 5.x (JupyterLab extension), Python 3.11 (server extension), Go 1.26.1 (kernel — minimal changes) + `@jupyterlab/application`, `@lumino/widgets`, webpack 5, tornado (server proxy)

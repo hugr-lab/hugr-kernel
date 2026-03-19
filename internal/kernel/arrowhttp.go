@@ -3,6 +3,7 @@ package kernel
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -11,9 +12,14 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
+	"github.com/apache/arrow-go/v18/arrow/memory"
+	"github.com/hugr-lab/duckdb-kernel/pkg/geoarrow"
 	"github.com/hugr-lab/hugr-kernel/internal/result"
 )
 
@@ -49,6 +55,10 @@ func NewArrowServer(sp *result.Spool) (*ArrowServer, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/arrow", as.handleArrow)
 	mux.HandleFunc("/arrow/stream", as.handleArrowStream)
+	mux.HandleFunc("/spool/delete", as.handleSpoolDelete)
+	mux.HandleFunc("/spool/pin", as.handleSpoolPin)
+	mux.HandleFunc("/spool/unpin", as.handleSpoolUnpin)
+	mux.HandleFunc("/spool/is_pinned", as.handleSpoolIsPinned)
 
 	// Serve perspective static files if available.
 	if exePath, err := os.Executable(); err == nil {
@@ -140,6 +150,9 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	wantGeoArrow := r.URL.Query().Get("geoarrow") == "1"
+	columnsParam := r.URL.Query().Get("columns")
+
 	reader, closer, err := as.spool.OpenReader(queryID)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -157,6 +170,21 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 
 	flusher, canFlush := w.(http.Flusher)
 	schema := reader.Schema()
+
+	// Detect geometry columns in the schema
+	geoCols := geoarrow.DetectGeometryColumns(schema)
+
+	// Build column projection set
+	var projectCols map[string]bool
+	if columnsParam != "" {
+		projectCols = make(map[string]bool)
+		for _, col := range strings.Split(columnsParam, ",") {
+			col = strings.TrimSpace(col)
+			if col != "" {
+				projectCols[col] = true
+			}
+		}
+	}
 
 	written := 0
 	for reader.Next() {
@@ -178,8 +206,52 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 			last = true
 		}
 
+		// Apply GeoArrow conversion or string replacement for geometry columns
+		if len(geoCols) > 0 {
+			if wantGeoArrow {
+				// Convert WKB → native GeoArrow struct arrays
+				for _, gc := range geoCols {
+					if gc.Format != "WKB" {
+						continue
+					}
+					converted, _, err := geoarrow.ConvertBatch(writeRec, gc, 0, memory.DefaultAllocator)
+					if err != nil {
+						log.Printf("geoarrow convert error for column %s: %v", gc.Name, err)
+						continue
+					}
+					if sliced {
+						writeRec.Release()
+					}
+					writeRec = converted
+					sliced = true // mark for release
+				}
+			} else {
+				// Replace geometry columns with "{geometry}" string for Perspective
+				replaced := replaceGeomColumns(writeRec, geoCols)
+				if replaced != nil {
+					if sliced {
+						writeRec.Release()
+					}
+					writeRec = replaced
+					sliced = true
+				}
+			}
+		}
+
+		// Apply column projection
+		if len(projectCols) > 0 {
+			projected := projectRecord(writeRec, projectCols)
+			if projected != nil {
+				if sliced {
+					writeRec.Release()
+				}
+				writeRec = projected
+				sliced = true
+			}
+		}
+
 		var buf bytes.Buffer
-		w2 := ipc.NewWriter(&buf, ipc.WithSchema(schema))
+		w2 := ipc.NewWriter(&buf, ipc.WithSchema(writeRec.Schema()))
 		if err := w2.Write(writeRec); err != nil {
 			if sliced {
 				writeRec.Release()
@@ -220,6 +292,79 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+// queryParam extracts the query ID from either "q" or "query_id" parameter.
+func queryParam(r *http.Request) string {
+	if q := r.URL.Query().Get("q"); q != "" {
+		return q
+	}
+	return r.URL.Query().Get("query_id")
+}
+
+// handleSpoolDelete deletes a spool file.
+func (as *ArrowServer) handleSpoolDelete(w http.ResponseWriter, r *http.Request) {
+	queryID := queryParam(r)
+	if queryID == "" {
+		http.Error(w, "missing q parameter", http.StatusBadRequest)
+		return
+	}
+	if err := as.spool.Remove(queryID); err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "not found", http.StatusNotFound)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+}
+
+// handleSpoolPin pins (persists) a spool file.
+func (as *ArrowServer) handleSpoolPin(w http.ResponseWriter, r *http.Request) {
+	queryID := queryParam(r)
+	if queryID == "" {
+		http.Error(w, "missing q parameter", http.StatusBadRequest)
+		return
+	}
+	if err := as.spool.Pin(queryID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"status": "ok", "pinned": true})
+}
+
+// handleSpoolUnpin removes a pinned result.
+func (as *ArrowServer) handleSpoolUnpin(w http.ResponseWriter, r *http.Request) {
+	queryID := queryParam(r)
+	if queryID == "" {
+		http.Error(w, "missing q parameter", http.StatusBadRequest)
+		return
+	}
+	if err := as.spool.Unpin(queryID); err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "not found", http.StatusNotFound)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"status": "ok", "pinned": false})
+}
+
+// handleSpoolIsPinned checks if a result is pinned.
+func (as *ArrowServer) handleSpoolIsPinned(w http.ResponseWriter, r *http.Request) {
+	queryID := queryParam(r)
+	if queryID == "" {
+		http.Error(w, "missing q parameter", http.StatusBadRequest)
+		return
+	}
+	pinned := as.spool.IsPinned(queryID)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"pinned": pinned})
+}
+
 func (as *ArrowServer) streamRawFile(w http.ResponseWriter, path string) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -237,11 +382,93 @@ func (as *ArrowServer) streamRawFile(w http.ResponseWriter, path string) {
 	}
 }
 
+// replaceGeomColumns replaces geometry columns with "{geometry}" strings in a single record.
+func replaceGeomColumns(rec arrow.RecordBatch, geoCols []geoarrow.GeometryColumn) arrow.RecordBatch {
+	if len(geoCols) == 0 {
+		return nil
+	}
+	numRows := int(rec.NumRows())
+	result := rec
+
+	for _, gc := range geoCols {
+		if gc.Index >= int(result.NumCols()) {
+			continue
+		}
+
+		bldr := array.NewStringBuilder(memory.DefaultAllocator)
+		origCol := result.Column(gc.Index)
+		for i := 0; i < numRows; i++ {
+			if origCol.IsNull(i) {
+				bldr.AppendNull()
+			} else {
+				bldr.Append("{geometry}")
+			}
+		}
+		strArr := bldr.NewArray()
+		bldr.Release()
+
+		field := result.Schema().Field(gc.Index)
+		newField := arrow.Field{
+			Name:     field.Name,
+			Type:     arrow.BinaryTypes.String,
+			Nullable: true,
+		}
+		fields := make([]arrow.Field, len(result.Schema().Fields()))
+		copy(fields, result.Schema().Fields())
+		fields[gc.Index] = newField
+		meta := result.Schema().Metadata()
+		newSchema := arrow.NewSchema(fields, &meta)
+
+		cols := make([]arrow.Array, result.NumCols())
+		for i := range int(result.NumCols()) {
+			if i == gc.Index {
+				cols[i] = strArr
+			} else {
+				cols[i] = result.Column(i)
+			}
+		}
+
+		newRec := array.NewRecordBatch(newSchema, cols, int64(numRows))
+		strArr.Release()
+
+		if result != rec {
+			result.Release()
+		}
+		result = newRec
+	}
+
+	return result
+}
+
+// projectRecord selects only the named columns from a record batch.
+func projectRecord(rec arrow.RecordBatch, cols map[string]bool) arrow.RecordBatch {
+	schema := rec.Schema()
+	var indices []int
+	for i, f := range schema.Fields() {
+		if cols[f.Name] {
+			indices = append(indices, i)
+		}
+	}
+	if len(indices) == 0 || len(indices) == len(schema.Fields()) {
+		return nil // no projection needed
+	}
+
+	fields := make([]arrow.Field, len(indices))
+	arrays := make([]arrow.Array, len(indices))
+	for i, idx := range indices {
+		fields[i] = schema.Field(idx)
+		arrays[i] = rec.Column(idx)
+	}
+	meta := schema.Metadata()
+	newSchema := arrow.NewSchema(fields, &meta)
+	return array.NewRecordBatch(newSchema, arrays, rec.NumRows())
+}
+
 func addCORS(h http.Handler) http.Handler {
 	origin := corsOrigin()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

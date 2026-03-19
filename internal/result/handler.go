@@ -7,7 +7,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/memory"
+	"github.com/hugr-lab/duckdb-kernel/pkg/geoarrow"
 	"github.com/hugr-lab/query-engine/types"
 )
 
@@ -19,21 +21,40 @@ type ArrowURLProvider interface {
 
 // PartDef describes a single result part for viewer metadata.
 type PartDef struct {
-	ID       string       `json:"id"`
-	Type     string       `json:"type"`
-	Title    string       `json:"title"`
-	ArrowURL string       `json:"arrow_url,omitempty"`
-	Rows     int64        `json:"rows,omitempty"`
-	Columns  []ColumnDef  `json:"columns,omitempty"`
-	DataSize int64        `json:"data_size_bytes,omitempty"`
-	Data     any          `json:"data,omitempty"`
-	Errors   []ErrorDef   `json:"errors,omitempty"`
+	ID              string               `json:"id"`
+	Type            string               `json:"type"`
+	Title           string               `json:"title"`
+	ArrowURL        string               `json:"arrow_url,omitempty"`
+	Rows            int64                `json:"rows,omitempty"`
+	Columns         []ColumnDef          `json:"columns,omitempty"`
+	DataSize        int64                `json:"data_size_bytes,omitempty"`
+	GeometryColumns []GeometryColumnMeta `json:"geometry_columns,omitempty"`
+	TileSources     []TileSourceMeta     `json:"tile_sources,omitempty"`
+	Data            any                  `json:"data,omitempty"`
+	Errors          []ErrorDef           `json:"errors,omitempty"`
 }
 
 // ColumnDef describes a column in an Arrow result part.
 type ColumnDef struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
+}
+
+// GeometryColumnMeta describes a geometry column detected in Arrow data.
+type GeometryColumnMeta struct {
+	Name   string `json:"name"`
+	SRID   int    `json:"srid"`
+	Format string `json:"format"` // WKB, GeoJSON, H3Cell
+}
+
+// TileSourceMeta describes a tile source for basemap rendering.
+type TileSourceMeta struct {
+	Name        string `json:"name"`
+	URL         string `json:"url"`
+	Type        string `json:"type"`
+	Attribution string `json:"attribution,omitempty"`
+	MinZoom     int    `json:"min_zoom,omitempty"`
+	MaxZoom     int    `json:"max_zoom,omitempty"`
 }
 
 // ErrorDef describes a GraphQL error.
@@ -52,11 +73,13 @@ type ViewerMetadata struct {
 	QueryTimeMs int64     `json:"query_time_ms"`
 
 	// Backward-compatible flat fields (from first Arrow part)
-	QueryID      string      `json:"query_id,omitempty"`
-	ArrowURL     string      `json:"arrow_url,omitempty"`
-	Rows         int64       `json:"rows,omitempty"`
-	Columns      []ColumnDef `json:"columns,omitempty"`
-	DataSizeBytes int64      `json:"data_size_bytes,omitempty"`
+	QueryID         string               `json:"query_id,omitempty"`
+	ArrowURL        string               `json:"arrow_url,omitempty"`
+	Rows            int64                `json:"rows,omitempty"`
+	Columns         []ColumnDef          `json:"columns,omitempty"`
+	DataSizeBytes   int64                `json:"data_size_bytes,omitempty"`
+	GeometryColumns []GeometryColumnMeta `json:"geometry_columns,omitempty"`
+	TileSources     []TileSourceMeta     `json:"tile_sources,omitempty"`
 }
 
 // Handler processes Hugr responses into viewer metadata.
@@ -151,6 +174,8 @@ func (h *Handler) HandleResponse(resp *types.Response, queryID string, queryTime
 			metadata.Rows = p.Rows
 			metadata.Columns = p.Columns
 			metadata.DataSizeBytes = p.DataSize
+			metadata.GeometryColumns = p.GeometryColumns
+			metadata.TileSources = p.TileSources
 			break
 		}
 	}
@@ -249,6 +274,20 @@ func (h *Handler) handleArrowPart(path, title, partID string, table types.ArrowT
 		}
 	}
 
+	// Detect geometry columns from Arrow schema metadata
+	geoCols := geoarrow.DetectGeometryColumns(schema)
+	var geometryColumns []GeometryColumnMeta
+	for _, gc := range geoCols {
+		geometryColumns = append(geometryColumns, GeometryColumnMeta{
+			Name:   gc.Name,
+			SRID:   gc.SRID,
+			Format: gc.Format,
+		})
+	}
+	// Detect hugr-specific geometry extensions (H3Cell, GeoJSON)
+	// that are not handled by geoarrow.DetectGeometryColumns
+	geometryColumns = append(geometryColumns, detectHugrGeometryColumns(schema)...)
+
 	// Spool to disk
 	if h.spool != nil {
 		sw, err := h.spool.NewStreamWriter(partID)
@@ -275,11 +314,12 @@ func (h *Handler) handleArrowPart(path, title, partID string, table types.ArrowT
 	}
 
 	part := &PartDef{
-		ID:      path,
-		Type:    "arrow",
-		Title:   title,
-		Rows:    totalRows,
-		Columns: columns,
+		ID:              path,
+		Type:            "arrow",
+		Title:           title,
+		Rows:            totalRows,
+		Columns:         columns,
+		GeometryColumns: geometryColumns,
 	}
 
 	if h.arrowServer != nil && h.spool != nil {
@@ -297,4 +337,47 @@ func (h *Handler) handleArrowPart(path, title, partID string, table types.ArrowT
 	text := fmt.Sprintf("[%s] %d rows, columns: %s", title, totalRows, strings.Join(colNames, ", "))
 
 	return part, text
+}
+
+// detectHugrGeometryColumns finds hugr-specific geometry columns (H3Cell, GeoJSON)
+// by checking ARROW:extension:name for "hugr.h3cell" and "hugr.geojson".
+func detectHugrGeometryColumns(schema *arrow.Schema) []GeometryColumnMeta {
+	var cols []GeometryColumnMeta
+	for _, f := range schema.Fields() {
+		if f.Metadata.Len() == 0 {
+			continue
+		}
+		idx := f.Metadata.FindKey("ARROW:extension:name")
+		if idx < 0 {
+			continue
+		}
+		ext := f.Metadata.Values()[idx]
+
+		var format string
+		switch ext {
+		case "hugr.h3cell":
+			format = "H3Cell"
+		case "hugr.geojson":
+			format = "GeoJSON"
+		default:
+			continue
+		}
+
+		srid := 0
+		if mi := f.Metadata.FindKey("ARROW:extension:metadata"); mi >= 0 {
+			var m struct {
+				SRID int `json:"srid"`
+			}
+			if err := json.Unmarshal([]byte(f.Metadata.Values()[mi]), &m); err == nil {
+				srid = m.SRID
+			}
+		}
+
+		cols = append(cols, GeometryColumnMeta{
+			Name:   f.Name,
+			Format: format,
+			SRID:   srid,
+		})
+	}
+	return cols
 }
