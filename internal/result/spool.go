@@ -144,9 +144,25 @@ func (s *Spool) OpenReader(queryID string) (*ipc.Reader, io.Closer, error) {
 	return r, f, nil
 }
 
-// Path returns the Arrow IPC file path for a given query ID.
+// Path returns the Arrow IPC file path for a given query ID (volatile spool only).
 func (s *Spool) Path(queryID string) string {
 	return filepath.Join(s.Dir, filepath.Base(queryID)+".arrow")
+}
+
+// FindPath returns the path to the spool file, checking persistent dir first.
+// Returns empty string if the file doesn't exist in either location.
+func (s *Spool) FindPath(queryID string) string {
+	if s.PersistentDir != "" {
+		p := filepath.Join(s.PersistentDir, filepath.Base(queryID)+".arrow")
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	p := s.Path(queryID)
+	if _, err := os.Stat(p); err == nil {
+		return p
+	}
+	return ""
 }
 
 // Exists checks if a spool file exists for the given query ID.
@@ -191,6 +207,10 @@ func (s *Spool) Pin(queryID string) error {
 	if _, err := io.Copy(out, in); err != nil {
 		os.Remove(dst)
 		return fmt.Errorf("copy: %w", err)
+	}
+	if err := out.Sync(); err != nil {
+		os.Remove(dst)
+		return fmt.Errorf("sync: %w", err)
 	}
 	return nil
 }
@@ -242,7 +262,7 @@ func (s *Spool) Cleanup() error {
 		path := filepath.Join(s.Dir, entry.Name())
 
 		if now.Sub(info.ModTime()) > s.TTL {
-			os.Remove(path)
+			_ = os.Remove(path) // ignore if already deleted by another kernel
 			continue
 		}
 
@@ -260,7 +280,7 @@ func (s *Spool) Cleanup() error {
 	}
 
 	for i := len(files) - 1; i >= 0 && totalSize > s.MaxSize; i-- {
-		os.Remove(files[i].path)
+		_ = os.Remove(files[i].path) // ignore if already deleted by another kernel
 		totalSize -= files[i].size
 	}
 

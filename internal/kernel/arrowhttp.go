@@ -65,7 +65,7 @@ func NewArrowServer(sp *result.Spool) (*ArrowServer, error) {
 		staticDir := filepath.Join(filepath.Dir(exePath), "static", "perspective")
 		if info, err := os.Stat(staticDir); err == nil && info.IsDir() {
 			fs := http.StripPrefix("/static/perspective/", http.FileServer(http.Dir(staticDir)))
-			mux.Handle("/static/perspective/", addCORS(fs))
+			mux.Handle("/static/perspective/", fs)
 			log.Printf("Serving perspective static files from %s", staticDir)
 		}
 	}
@@ -121,13 +121,9 @@ func (as *ArrowServer) handleArrow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path := as.spool.Path(queryID)
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			http.Error(w, "not found", http.StatusNotFound)
-		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
+	path := as.spool.FindPath(queryID)
+	if path == "" {
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 
@@ -300,18 +296,20 @@ func queryParam(r *http.Request) string {
 	return r.URL.Query().Get("query_id")
 }
 
-// handleSpoolDelete deletes a spool file.
+// handleSpoolDelete deletes a spool file from both volatile and persistent storage.
 func (as *ArrowServer) handleSpoolDelete(w http.ResponseWriter, r *http.Request) {
 	queryID := queryParam(r)
 	if queryID == "" {
 		http.Error(w, "missing q parameter", http.StatusBadRequest)
 		return
 	}
-	if err := as.spool.Remove(queryID); err != nil {
-		if os.IsNotExist(err) {
+	errVolatile := as.spool.Remove(queryID)
+	errPinned := as.spool.Unpin(queryID)
+	if errVolatile != nil && errPinned != nil {
+		if os.IsNotExist(errVolatile) {
 			http.Error(w, "not found", http.StatusNotFound)
 		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, errVolatile.Error(), http.StatusInternalServerError)
 		}
 		return
 	}
