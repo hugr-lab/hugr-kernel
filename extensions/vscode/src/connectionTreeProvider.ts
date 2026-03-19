@@ -16,11 +16,13 @@ import * as path from 'path';
 import * as os from 'os';
 import * as http from 'http';
 import * as https from 'https';
+import { HugrClient } from './explorer/hugrClient';
 
-interface ConnectionEntry {
+export interface ConnectionEntry {
   name: string;
   url: string;
   auth_type?: string;
+  auth_credential?: string;
   [key: string]: unknown; // preserve extra fields (created_at, etc.)
 }
 
@@ -34,8 +36,12 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
   private _onDidChangeTreeData = new vscode.EventEmitter<ConnectionEntry | undefined>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
+  private _onDidChangeDefault = new vscode.EventEmitter<ConnectionEntry | undefined>();
+  readonly onDidChangeDefault = this._onDidChangeDefault.event;
+
   private _connections: ConnectionEntry[] = [];
   private _defaultName = '';
+  private _prevDefaultName = '';
   private _watcher: fs.FSWatcher | null = null;
   private _extraFields: Record<string, unknown> = {}; // preserve kernels, etc.
 
@@ -46,10 +52,34 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
 
   dispose(): void {
     this._watcher?.close();
+    this._onDidChangeDefault.dispose();
   }
 
   refresh(): void {
     this._load();
+  }
+
+  /**
+   * Returns the current default connection entry, or undefined if none.
+   */
+  getDefaultConnection(): ConnectionEntry | undefined {
+    return this._connections.find(c => c.name === this._defaultName);
+  }
+
+  /**
+   * Creates a HugrClient for the given connection (or the default).
+   */
+  createClient(connectionName?: string): HugrClient | null {
+    const name = connectionName ?? this._defaultName;
+    const conn = this._connections.find(c => c.name === name);
+    if (!conn) return null;
+
+    return new HugrClient({
+      url: conn.url,
+      authType: (conn.auth_type as any) ?? 'public',
+      apiKey: conn.auth_type === 'api_key' ? (conn.auth_credential as string) : undefined,
+      token: conn.auth_type === 'bearer' ? (conn.auth_credential as string) : undefined,
+    });
   }
 
   getTreeItem(element: ConnectionEntry): vscode.TreeItem {
@@ -184,6 +214,7 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
       this._defaultName = '';
     }
     this._onDidChangeTreeData.fire(undefined);
+    this._fireDefaultChangeIfNeeded();
   }
 
   private _save(): void {
@@ -199,6 +230,14 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
     };
     fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf-8');
     this._onDidChangeTreeData.fire(undefined);
+    this._fireDefaultChangeIfNeeded();
+  }
+
+  private _fireDefaultChangeIfNeeded(): void {
+    if (this._defaultName !== this._prevDefaultName) {
+      this._prevDefaultName = this._defaultName;
+      this._onDidChangeDefault.fire(this.getDefaultConnection());
+    }
   }
 
   private _watchFile(): void {
