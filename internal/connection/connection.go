@@ -198,11 +198,28 @@ func (c *Connection) ExpiresAt() time.Time {
 }
 
 // IsAuthenticated returns true if the connection has a valid non-expired token.
+// For browser connections, re-reads connections.json if the in-memory token is expired.
 func (c *Connection) IsAuthenticated() bool {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.AuthMode != AuthBrowser {
-		return c.AuthMode != AuthPublic
+	mode := c.AuthMode
+	hasToken := c.accessToken != ""
+	valid := hasToken && time.Until(c.expiresAt) > 0
+	c.mu.Unlock()
+
+	if mode != AuthBrowser {
+		return mode != AuthPublic
 	}
+
+	if valid {
+		return true
+	}
+
+	// Token expired in memory — try re-reading from file
+	if err := c.RefreshBrowserToken(); err != nil {
+		return false
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.accessToken != "" && time.Until(c.expiresAt) > 0
 }

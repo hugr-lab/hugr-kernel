@@ -86,7 +86,12 @@ class LoginSession:
             if "refresh_token" in tokens:
                 self.refresh_token = tokens["refresh_token"]
 
-            _write_tokens(self.connection_name, self.access_token, self.expires_at)
+            _write_tokens(self.connection_name, self.access_token, self.expires_at,
+                         oidc_meta={
+                             "issuer": self.issuer,
+                             "client_id": self.client_id,
+                             "token_endpoint": self.token_endpoint,
+                         } if self.token_endpoint else None)
             log.info("Refreshed token for %r, expires in %ds",
                      self.connection_name, tokens.get("expires_in", 300))
             self.start_refresh_timer()
@@ -122,7 +127,8 @@ def _save_config(cfg: dict) -> None:
     p.write_text(json.dumps(cfg, indent=2) + "\n")
 
 
-def _write_tokens(connection_name: str, access_token: str, expires_at: float):
+def _write_tokens(connection_name: str, access_token: str, expires_at: float,
+                   oidc_meta: dict | None = None):
     """Write access_token + expires_at to connections.json for a connection."""
     cfg = _load_config()
     for conn in cfg.get("connections", []):
@@ -131,16 +137,20 @@ def _write_tokens(connection_name: str, access_token: str, expires_at: float):
                 "access_token": access_token,
                 "expires_at": int(expires_at),
             }
+            if oidc_meta:
+                conn["oidc"] = oidc_meta
             break
     _save_config(cfg)
 
 
-def _clear_tokens(connection_name: str):
+def _clear_tokens(connection_name: str, clear_oidc: bool = False):
     """Remove tokens from connections.json for a connection."""
     cfg = _load_config()
     for conn in cfg.get("connections", []):
         if conn.get("name") == connection_name:
             conn.pop("tokens", None)
+            if clear_oidc:
+                conn.pop("oidc", None)
             break
     _save_config(cfg)
 
@@ -206,13 +216,11 @@ def start_login(connection_name: str, hugr_url: str, callback_base_url: str) -> 
         # Already logged in — allow re-login (will replace session)
         pass
 
-    # Check for pending login
-    for state, pending in _pending.items():
+    # Clean up any existing pending login for this connection
+    for state, pending in list(_pending.items()):
         if pending.connection_name == connection_name:
-            if time.time() - pending.created_at < 120:
-                raise ValueError("Login already in progress")
-            # Expired pending login — clean up
             _pending.pop(state, None)
+            log.info("Cleared previous pending login for %r", connection_name)
             break
 
     # Discover OIDC config from Hugr server
@@ -307,7 +315,11 @@ def exchange_code(state: str, code: str) -> LoginSession:
 
     # Write access token to file (skip for temp test connections)
     if not pending.connection_name.startswith("__test_"):
-        _write_tokens(pending.connection_name, access_token, expires_at)
+        _write_tokens(pending.connection_name, access_token, expires_at, oidc_meta={
+            "issuer": pending.issuer,
+            "client_id": pending.client_id,
+            "token_endpoint": pending.token_endpoint,
+        })
 
     # Create session
     session = LoginSession(
@@ -383,7 +395,7 @@ def logout(connection_name: str, post_logout_redirect: str = "") -> dict | None:
             except Exception as e:
                 log.warning("Failed to discover end_session_endpoint for %r: %s",
                             connection_name, e)
-    _clear_tokens(connection_name)
+    _clear_tokens(connection_name, clear_oidc=True)
     log.info("Logged out %r", connection_name)
     return {"end_session_url": end_session_url} if end_session_url else None
 
@@ -411,36 +423,53 @@ def cleanup_expired_pending():
         _pending.pop(s, None)
 
 
-def restore_sessions_on_startup():
+def restore_sessions_on_startup() -> list[dict]:
     """Scan connections.json on startup for browser connections with valid tokens.
 
     After a service restart, refresh_token is lost. If access_token is still valid,
     mark the connection as authenticated (no refresh) so queries work until expiry.
+
+    Returns list of connections that need re-login (expired token + oidc metadata).
     """
     cfg = _load_config()
+    needs_relogin: list[dict] = []
+
     for conn in cfg.get("connections", []):
         if conn.get("auth_type") != "browser":
             continue
+
+        oidc_meta = conn.get("oidc", {})
         tokens = conn.get("tokens")
+
         if not tokens or not tokens.get("access_token"):
+            # No tokens but has oidc metadata — needs re-login
+            if oidc_meta.get("issuer"):
+                needs_relogin.append({"name": conn["name"], "url": conn.get("url", "")})
             continue
+
         expires_at = tokens.get("expires_at", 0)
         if expires_at <= time.time():
-            # Token expired — clear it
-            log.info("Clearing expired token for %r on startup", conn["name"])
+            # Token expired — needs re-login
+            log.info("Token expired for %r on startup", conn["name"])
             conn.pop("tokens", None)
+            if oidc_meta.get("issuer"):
+                needs_relogin.append({"name": conn["name"], "url": conn.get("url", "")})
             continue
 
         # Token still valid but no refresh_token (lost on restart)
+        issuer = oidc_meta.get("issuer", "")
+        client_id = oidc_meta.get("client_id", "")
+        token_endpoint = oidc_meta.get("token_endpoint", "")
+
         # Create a session without refresh capability
         session = LoginSession(
             connection_name=conn["name"],
             refresh_token="",  # lost on restart
             access_token=tokens["access_token"],
             expires_at=expires_at,
-            token_endpoint="",
-            client_id="",
-            issuer="",
+            token_endpoint=token_endpoint,
+            client_id=client_id,
+            issuer=issuer,
         )
         _sessions[conn["name"]] = session
         log.info("Restored session for %r (no refresh, expires at %d)",
@@ -448,3 +477,6 @@ def restore_sessions_on_startup():
 
     # Save config with any cleared tokens
     _save_config(cfg)
+    return needs_relogin
+
+

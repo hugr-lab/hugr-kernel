@@ -58,6 +58,7 @@ interface ConnectionInfo {
   status: string;
   authenticated?: boolean;
   expires_at?: number;
+  was_authenticated?: boolean;
 }
 
 export class ConnectionManagerWidget extends Widget {

@@ -3,6 +3,7 @@
  *
  * Provides:
  * - Connection manager (read/write ~/.hugr/connections.json)
+ * - OIDC browser login for browser auth connections
  * - Schema explorer with lazy-loading tree
  * - Types search with pagination
  * - Directives list
@@ -32,7 +33,7 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   // --- Connection Manager ---
-  const connectionProvider = new ConnectionTreeProvider();
+  const connectionProvider = new ConnectionTreeProvider(context.secrets);
   vscode.window.registerTreeDataProvider('hugr.connections', connectionProvider);
   context.subscriptions.push({ dispose: () => connectionProvider.dispose() });
 
@@ -43,6 +44,8 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('hugr.testConnection', (entry) => connectionProvider.testConnection(entry)),
     vscode.commands.registerCommand('hugr.editConnection', (entry) => connectionProvider.editConnection(entry)),
     vscode.commands.registerCommand('hugr.refreshConnections', () => connectionProvider.refresh()),
+    vscode.commands.registerCommand('hugr.loginConnection', (entry) => connectionProvider.loginConnection(entry)),
+    vscode.commands.registerCommand('hugr.logoutConnection', (entry) => connectionProvider.logoutConnection(entry)),
   );
 
   // --- Schema Tree ---

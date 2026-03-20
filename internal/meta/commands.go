@@ -322,22 +322,46 @@ func whoamiCommand(cm *connection.Manager) CommandFunc {
 			"auth_mode":  string(conn.AuthMode),
 		}
 
+		// Query Hugr server for authenticated user info
+		resp, err := conn.Query(ctx, `{ function { core { auth { me { user_id user_name role auth_type auth_provider } } } } }`, nil)
+		if err == nil && resp != nil {
+			var me struct {
+				UserID       string `json:"user_id"`
+				UserName     string `json:"user_name"`
+				Role         string `json:"role"`
+				AuthType     string `json:"auth_type"`
+				AuthProvider string `json:"auth_provider"`
+			}
+			if scanErr := resp.ScanData("function.core.auth.me", &me); scanErr == nil {
+				jsonData["user_id"] = me.UserID
+				jsonData["user_name"] = me.UserName
+				jsonData["role"] = me.Role
+				jsonData["auth_type"] = me.AuthType
+				jsonData["auth_provider"] = me.AuthProvider
+
+				return &CommandResult{
+					Text: fmt.Sprintf("Connection: %s\nUser: %s\nRole: %s\nAuth: %s (%s)",
+						conn.Name, me.UserName, me.Role, me.AuthType, me.AuthProvider),
+					JSON: jsonData,
+				}, nil
+			}
+		}
+
+		// Fallback: no server info available
 		if conn.AuthMode == connection.AuthBrowser {
 			authenticated := conn.IsAuthenticated()
-			expiresAt := conn.ExpiresAt()
-			expiresStr := "N/A"
-			if !expiresAt.IsZero() {
-				expiresStr = expiresAt.Format(time.RFC3339)
-			}
 			authStatus := "not authenticated"
 			if authenticated {
 				authStatus = "authenticated"
 			}
 			jsonData["authenticated"] = authenticated
-			jsonData["expires_at"] = expiresStr
+			errMsg := ""
+			if err != nil {
+				errMsg = fmt.Sprintf("\nError: %s", err)
+			}
 			return &CommandResult{
-				Text: fmt.Sprintf("Connection: %s\nAuth mode: browser\nStatus: %s\nExpires: %s",
-					conn.Name, authStatus, expiresStr),
+				Text: fmt.Sprintf("Connection: %s\nAuth mode: browser\nStatus: %s%s",
+					conn.Name, authStatus, errMsg),
 				JSON: jsonData,
 			}, nil
 		}

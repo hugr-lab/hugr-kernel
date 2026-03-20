@@ -160,6 +160,8 @@ class ConnectionsHandler(APIHandler):
                 entry["authenticated"] = auth_status["authenticated"]
                 if auth_status.get("expires_at"):
                     entry["expires_at"] = auth_status["expires_at"]
+                if c.get("oidc"):
+                    entry["was_authenticated"] = True
             result.append(entry)
         self.finish(json.dumps(result))
 

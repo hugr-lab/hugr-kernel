@@ -129,6 +129,18 @@
         "title": "Refresh",
         "icon": "$(refresh)",
         "category": "Hugr"
+      },
+      {
+        "command": "hugr.loginConnection",
+        "title": "Login",
+        "icon": "$(sign-in)",
+        "category": "Hugr"
+      },
+      {
+        "command": "hugr.logoutConnection",
+        "title": "Logout",
+        "icon": "$(sign-out)",
+        "category": "Hugr"
       }
     ],
     "menus": {
@@ -156,14 +168,34 @@
       ],
       "view/item/context": [
         {
-          "command": "hugr.testConnection",
-          "when": "view == hugr.connections",
+          "command": "hugr.loginConnection",
+          "when": "view == hugr.connections && viewItem == connection_browser_noauth",
           "group": "inline@1"
         },
         {
-          "command": "hugr.setDefaultConnection",
-          "when": "view == hugr.connections && viewItem == connection",
+          "command": "hugr.logoutConnection",
+          "when": "view == hugr.connections && viewItem == connection_browser_auth",
+          "group": "inline@1"
+        },
+        {
+          "command": "hugr.testConnection",
+          "when": "view == hugr.connections",
           "group": "inline@2"
+        },
+        {
+          "command": "hugr.setDefaultConnection",
+          "when": "view == hugr.connections && viewItem =~ /^connection/",
+          "group": "inline@3"
+        },
+        {
+          "command": "hugr.loginConnection",
+          "when": "view == hugr.connections && viewItem =~ /connection_browser/",
+          "group": "0_auth@1"
+        },
+        {
+          "command": "hugr.logoutConnection",
+          "when": "view == hugr.connections && viewItem == connection_browser_auth",
+          "group": "0_auth@2"
         },
         {
           "command": "hugr.editConnection",

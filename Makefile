@@ -15,7 +15,9 @@ build-ext:
 
 install: install-ext copy-perspective
 	mkdir -p $(KERNEL_DIR)
-	cp kernel/kernel.json $(KERNEL_DIR)/kernel.json
+	@sed 's|"hugr-kernel"|"$(KERNEL_DIR)/hugr-kernel"|' kernel/kernel.json > $(KERNEL_DIR)/kernel.json
+	@ln -sfn $(CURDIR)/.venv/bin/hugr-kernel $(KERNEL_DIR)/hugr-kernel
+	@ln -sfn $(CURDIR)/.venv/bin/static $(KERNEL_DIR)/static
 	@echo "Kernel installed to $(KERNEL_DIR)"
 
 install-ext: build-ext
