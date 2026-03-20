@@ -2,6 +2,7 @@
 .claude/
 .specify/
 specs/
+design/
 
 # Go
 *.exe

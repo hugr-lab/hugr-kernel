@@ -3,20 +3,30 @@ package connection
 import (
 	"fmt"
 	"sync"
+	"time"
 )
 
 // Manager manages the set of connections and tracks the default.
 type Manager struct {
-	connections map[string]*Connection
-	defaultName string
-	mu          sync.RWMutex
+	connections  map[string]*Connection
+	defaultName  string
+	queryTimeout time.Duration
+	mu           sync.RWMutex
 }
 
 // NewManager creates a new connection manager.
 func NewManager() *Manager {
 	return &Manager{
-		connections: make(map[string]*Connection),
+		connections:  make(map[string]*Connection),
+		queryTimeout: DefaultTimeout,
 	}
+}
+
+// SetQueryTimeout sets the timeout for all new connections.
+func (m *Manager) SetQueryTimeout(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.queryTimeout = d
 }
 
 // Add creates and registers a new connection. The first connection becomes the default.
@@ -25,6 +35,8 @@ func (m *Manager) Add(name, url string) {
 	defer m.mu.Unlock()
 
 	conn := NewConnection(name, url)
+	conn.Timeout = m.queryTimeout
+	conn.recreateClient()
 	m.connections[name] = conn
 	if m.defaultName == "" {
 		m.defaultName = name

@@ -46,6 +46,9 @@ function makeRequest(method: string, body?: any): RequestInit {
   };
 }
 
+const ICON_LOGIN = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>`;
+const ICON_LOGOUT = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>`;
+
 interface ConnectionInfo {
   name: string;
   url: string;
@@ -53,10 +56,14 @@ interface ConnectionInfo {
   role: string | null;
   read_only: boolean;
   status: string;
+  authenticated?: boolean;
+  expires_at?: number;
 }
 
 export class ConnectionManagerWidget extends Widget {
   private _connections: ConnectionInfo[] = [];
+  private _authMonitorTimer: ReturnType<typeof setInterval> | null = null;
+  private _previousAuthState: Map<string, boolean> = new Map();
 
   constructor() {
     super();
@@ -90,9 +97,57 @@ export class ConnectionManagerWidget extends Widget {
       const resp = await fetch(`${BASE_URL}/connections`);
       this._connections = await resp.json();
       this._renderList();
+      this._startAuthMonitor();
     } catch (e) {
       console.error('Failed to load connections', e);
     }
+  }
+
+  /**
+   * Periodically check auth status for browser connections.
+   * Shows a notification when a previously authenticated connection expires.
+   */
+  private _startAuthMonitor(): void {
+    // Clear existing timer
+    if (this._authMonitorTimer) {
+      clearInterval(this._authMonitorTimer);
+      this._authMonitorTimer = null;
+    }
+
+    const browserConns = this._connections.filter(c => c.auth_type === 'browser');
+    if (browserConns.length === 0) return;
+
+    // Update initial state
+    for (const c of browserConns) {
+      this._previousAuthState.set(c.name, !!c.authenticated);
+    }
+
+    // Poll every 30 seconds
+    this._authMonitorTimer = setInterval(async () => {
+      for (const c of this._connections.filter(conn => conn.auth_type === 'browser')) {
+        try {
+          const resp = await fetch(`${BASE_URL}/connections/${c.name}/auth`);
+          const data = await resp.json();
+          const wasAuthenticated = this._previousAuthState.get(c.name) ?? false;
+          if (wasAuthenticated && !data.authenticated) {
+            this._showResult(
+              `<span class="hugr-cm-err">Session expired for "${escapeHtml(c.name)}" — please re-login</span>`
+            );
+            await this._loadConnections();
+            return; // _loadConnections will restart the monitor
+          }
+          this._previousAuthState.set(c.name, data.authenticated);
+        } catch { /* ignore poll errors */ }
+      }
+    }, 30000);
+  }
+
+  dispose(): void {
+    if (this._authMonitorTimer) {
+      clearInterval(this._authMonitorTimer);
+      this._authMonitorTimer = null;
+    }
+    super.dispose();
   }
 
   private _renderList(): void {
@@ -109,17 +164,30 @@ export class ConnectionManagerWidget extends Widget {
     empty.style.display = 'none';
     list.innerHTML = this._connections.map(c => {
       const isDefault = c.status === 'default';
+      const isBrowser = c.auth_type === 'browser';
+      const authDot = isBrowser
+        ? (c.authenticated
+          ? '<span class="hugr-cm-dot hugr-cm-dot-green" title="Authenticated"></span>'
+          : '<span class="hugr-cm-dot hugr-cm-dot-red" title="Not authenticated"></span>')
+        : '';
+      const authLabel = isBrowser
+        ? (c.authenticated ? '<span class="hugr-cm-badge-auth">authenticated</span>' : '<span class="hugr-cm-badge-noauth">not authenticated</span>')
+        : '';
       return `
       <div class="hugr-cm-card${isDefault ? ' hugr-cm-card-default' : ''}" data-name="${escapeHtml(c.name)}">
         <div class="hugr-cm-card-main">
-          <div class="hugr-cm-card-name">${c.read_only ? '<span class="hugr-cm-lock" title="Read-only">&#128274;</span>' : ''}${escapeHtml(c.name)}${isDefault ? ' <span class="hugr-cm-badge-default">default</span>' : ''}</div>
+          <div class="hugr-cm-card-name">${authDot}${c.read_only ? '<span class="hugr-cm-lock" title="Read-only">&#128274;</span>' : ''}${escapeHtml(c.name)}${isDefault ? ' <span class="hugr-cm-badge-default">default</span>' : ''}</div>
           <div class="hugr-cm-card-actions">
+            ${isBrowser ? (c.authenticated
+              ? `<button class="hugr-cm-icon-btn hugr-btn-logout-row" data-name="${escapeHtml(c.name)}" title="Logout">${ICON_LOGOUT}</button>`
+              : `<button class="hugr-cm-icon-btn hugr-btn-login-row" data-name="${escapeHtml(c.name)}" title="Login">${ICON_LOGIN}</button>`
+            ) : ''}
             ${isDefault ? '' : `<button class="hugr-cm-icon-btn hugr-btn-default-row" data-name="${escapeHtml(c.name)}" title="Set as default">${ICON_STAR}</button>`}
             <button class="hugr-cm-icon-btn hugr-btn-test-row" data-name="${escapeHtml(c.name)}" title="Test">${ICON_PLAY}</button>
             ${c.read_only ? '' : `<button class="hugr-cm-icon-btn hugr-btn-del-row" data-name="${escapeHtml(c.name)}" title="Delete">${ICON_TRASH}</button>`}
           </div>
         </div>
-        <div class="hugr-cm-card-detail">${escapeHtml(c.url.replace(/^https?:\/\//, ''))} &middot; ${escapeHtml(c.auth_type)}</div>
+        <div class="hugr-cm-card-detail">${escapeHtml(c.url.replace(/^https?:\/\//, ''))} &middot; ${escapeHtml(c.auth_type)}${authLabel ? ' ' + authLabel : ''}</div>
       </div>
     `;
     }).join('');
@@ -142,6 +210,20 @@ export class ConnectionManagerWidget extends Widget {
       btn.addEventListener('click', (e) => {
         const name = (e.currentTarget as HTMLElement).dataset.name;
         if (name) this._testConnectionByName(name);
+      });
+    });
+
+    list.querySelectorAll('.hugr-btn-login-row').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const name = (e.currentTarget as HTMLElement).dataset.name;
+        if (name) this._loginConnection(name);
+      });
+    });
+
+    list.querySelectorAll('.hugr-btn-logout-row').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const name = (e.currentTarget as HTMLElement).dataset.name;
+        if (name) this._logoutConnection(name);
       });
     });
   }
@@ -178,6 +260,7 @@ export class ConnectionManagerWidget extends Widget {
               <option value="public">Public</option>
               <option value="api_key">API Key</option>
               <option value="bearer">Bearer</option>
+              <option value="browser">Browser (OIDC)</option>
             </select>
           </div>
           <div class="hugr-cm-field hugr-dlg-role" style="display:none">
@@ -214,11 +297,33 @@ export class ConnectionManagerWidget extends Widget {
     const credLabel = overlay.querySelector('.hugr-dlg-cred-label') as HTMLElement;
     const credInput = overlay.querySelector('[data-field="credential"]') as HTMLInputElement;
     authSelect?.addEventListener('change', () => {
-      const isPublic = authSelect.value === 'public';
-      credWrap.style.display = isPublic ? 'none' : '';
-      roleWrap.style.display = isPublic ? 'none' : '';
+      const needsCred = authSelect.value === 'api_key' || authSelect.value === 'bearer';
+      credWrap.style.display = needsCred ? '' : 'none';
+      roleWrap.style.display = authSelect.value === 'public' || authSelect.value === 'browser' ? 'none' : '';
       credLabel.textContent = authSelect.value === 'api_key' ? 'API Key' : 'Token';
       credInput.placeholder = authSelect.value === 'api_key' ? 'sk-...' : 'Bearer token';
+    });
+
+    // Auto-discover OIDC when URL field loses focus
+    const urlInput = overlay.querySelector('[data-field="url"]') as HTMLInputElement;
+    urlInput?.addEventListener('blur', async () => {
+      const url = urlInput.value.trim();
+      if (!url || authSelect.value !== 'public') return;
+      try {
+        const resp = await fetch(`${BASE_URL}/discover`, makeRequest('POST', { url }));
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.oidc_available) {
+            authSelect.value = 'browser';
+            authSelect.dispatchEvent(new Event('change'));
+            const resultEl = overlay.querySelector('.hugr-dlg-result') as HTMLElement;
+            if (resultEl) {
+              resultEl.innerHTML = '<span class="hugr-cm-info">OIDC detected — auth set to Browser</span>';
+              setTimeout(() => { resultEl.innerHTML = ''; }, 3000);
+            }
+          }
+        }
+      } catch { /* ignore discovery errors */ }
     });
 
     const resultEl = overlay.querySelector('.hugr-dlg-result') as HTMLElement;
@@ -232,12 +337,107 @@ export class ConnectionManagerWidget extends Widget {
       role: (overlay.querySelector('[data-field="role"]') as HTMLInputElement)?.value || '',
     });
 
-    // Test button — does NOT close
+    /** Save connection to server (create or update). */
+    const saveConnection = async (vals: ReturnType<typeof getVals>): Promise<boolean> => {
+      const body: any = { name: vals.name, url: vals.url, auth_type: vals.auth_type };
+      if (vals.auth_type === 'api_key') body.api_key = vals.credential;
+      if (vals.auth_type === 'bearer') body.token = vals.credential;
+      if (vals.role) body.role = vals.role;
+      let resp = await fetch(`${BASE_URL}/connections`, makeRequest('POST', body));
+      if (resp.status === 409) {
+        resp = await fetch(`${BASE_URL}/connections/${vals.name}`, makeRequest('PUT', body));
+      }
+      return resp.ok;
+    };
+
+    /** Start browser login flow: POST login, open auth URL, poll until authenticated. */
+    const doBrowserLogin = (name: string): Promise<boolean> => {
+      return new Promise(async (resolve) => {
+        try {
+          const resp = await fetch(`${BASE_URL}/connections/${name}/login`, makeRequest('POST'));
+          const data = await resp.json();
+          if (!resp.ok) {
+            showMsg(`<span class="hugr-cm-err">${escapeHtml(data.error || 'Login failed')}</span>`);
+            resolve(false);
+            return;
+          }
+          window.open(data.auth_url, '_blank');
+          showMsg('<span class="hugr-cm-info">Waiting for login...</span>');
+          // Poll auth status
+          let attempts = 0;
+          const poll = () => {
+            if (attempts > 60) { resolve(false); return; }
+            attempts++;
+            setTimeout(async () => {
+              try {
+                const r = await fetch(`${BASE_URL}/connections/${name}/auth`);
+                const d = await r.json();
+                if (d.authenticated) { resolve(true); return; }
+              } catch { /* ignore */ }
+              poll();
+            }, 2000);
+          };
+          poll();
+        } catch {
+          showMsg('<span class="hugr-cm-err">Login failed</span>');
+          resolve(false);
+        }
+      });
+    };
+
+    // Test button — does NOT close, does NOT save for non-browser
     overlay.querySelector('.hugr-dlg-btn-test')?.addEventListener('click', async () => {
       const vals = getVals();
       if (!vals.url) { showMsg('<span class="hugr-cm-err">URL is required</span>'); return; }
       showMsg('<span class="hugr-cm-info">Testing...</span>');
 
+      if (vals.auth_type === 'browser') {
+        // Browser: server-side test — POST /hugr/test starts OIDC login, callback runs test query
+        try {
+          const resp = await fetch(`${BASE_URL}/test`, makeRequest('POST', { url: vals.url, auth_type: 'browser' }));
+          const data = await resp.json();
+          if (!resp.ok) {
+            showMsg(`<span class="hugr-cm-err">${escapeHtml(data.error || 'Test failed')}</span>`);
+            return;
+          }
+          // Open auth URL in new tab
+          window.open(data.auth_url, '_blank');
+          showMsg('<span class="hugr-cm-info">Waiting for login & test...</span>');
+          // Poll GET /hugr/test/<test_id> for result
+          const testId = data.test_id;
+          let attempts = 0;
+          const poll = () => {
+            if (attempts > 60) {
+              showMsg('<span class="hugr-cm-err">Test timed out</span>');
+              return;
+            }
+            attempts++;
+            setTimeout(async () => {
+              try {
+                const r = await fetch(`${BASE_URL}/test/${encodeURIComponent(testId)}`);
+                const result = await r.json();
+                if (result.status === 'pending' || (result.ok === undefined && !result.error)) {
+                  poll();
+                  return;
+                }
+                if (result.ok) {
+                  showMsg(`<span class="hugr-cm-ok">v${escapeHtml(String(result.version || 'unknown'))}</span>`);
+                } else {
+                  showMsg(`<span class="hugr-cm-err">${escapeHtml(result.error || 'Test failed')}</span>`);
+                }
+              } catch {
+                poll();
+              }
+            }, 2000);
+          };
+          poll();
+        } catch {
+          showMsg('<span class="hugr-cm-err">Test failed</span>');
+        }
+        return;
+      }
+
+      // Non-browser: direct test (no save)
       try {
         const client = new HugrClient({
           url: vals.url,
@@ -263,16 +463,21 @@ export class ConnectionManagerWidget extends Widget {
       const vals = getVals();
       if (!vals.name || !vals.url) { showMsg('<span class="hugr-cm-err">Name and URL are required</span>'); return; }
 
-      const body: any = { name: vals.name, url: vals.url, auth_type: vals.auth_type };
-      if (vals.auth_type === 'api_key') body.api_key = vals.credential;
-      if (vals.auth_type === 'bearer') body.token = vals.credential;
-      if (vals.role) body.role = vals.role;
-
       try {
-        let resp = await fetch(`${BASE_URL}/connections`, makeRequest('POST', body));
-        if (resp.status === 409) {
-          resp = await fetch(`${BASE_URL}/connections/${vals.name}`, makeRequest('PUT', body));
+        const saved = await saveConnection(vals);
+        if (!saved) { showMsg('<span class="hugr-cm-err">Save failed</span>'); return; }
+
+        // For browser connections: login after save
+        if (vals.auth_type === 'browser') {
+          const loggedIn = await doBrowserLogin(vals.name);
+          if (!loggedIn) {
+            showMsg('<span class="hugr-cm-err">Saved, but login failed</span>');
+            await this._loadConnections();
+            setTimeout(() => { showMsg(''); close(); }, 2000);
+            return;
+          }
         }
+
         await this._loadConnections();
         this._showResult('<span class="hugr-cm-ok">Saved. Restart running kernels to apply.</span>');
         setTimeout(() => this._showResult(''), 4000);
@@ -347,6 +552,64 @@ export class ConnectionManagerWidget extends Widget {
     }
   }
 
+
+  private async _loginConnection(name: string): Promise<void> {
+    this._showResult('<span class="hugr-cm-info">Starting login...</span>');
+    try {
+      const resp = await fetch(`${BASE_URL}/connections/${name}/login`, makeRequest('POST'));
+      const data = await resp.json();
+      if (!resp.ok) {
+        this._showResult(`<span class="hugr-cm-err">${escapeHtml(data.error || 'Login failed')}</span>`);
+        setTimeout(() => this._showResult(''), 5000);
+        return;
+      }
+      // Open auth URL in new window
+      window.open(data.auth_url, '_blank');
+      this._showResult('<span class="hugr-cm-info">Waiting for login...</span>');
+      // Poll for auth status
+      this._pollAuthStatus(name);
+    } catch (e) {
+      this._showResult('<span class="hugr-cm-err">Login failed</span>');
+      setTimeout(() => this._showResult(''), 5000);
+    }
+  }
+
+  private _pollAuthStatus(name: string, attempts = 0): void {
+    if (attempts > 60) { // 2 minutes max
+      this._showResult('<span class="hugr-cm-err">Login timed out</span>');
+      setTimeout(() => this._showResult(''), 5000);
+      return;
+    }
+    setTimeout(async () => {
+      try {
+        const resp = await fetch(`${BASE_URL}/connections/${name}/auth`);
+        const data = await resp.json();
+        if (data.authenticated) {
+          this._showResult('<span class="hugr-cm-ok">Logged in</span>');
+          setTimeout(() => this._showResult(''), 3000);
+          await this._loadConnections();
+          return;
+        }
+      } catch { /* ignore poll errors */ }
+      this._pollAuthStatus(name, attempts + 1);
+    }, 2000);
+  }
+
+  private async _logoutConnection(name: string): Promise<void> {
+    try {
+      const resp = await fetch(`${BASE_URL}/connections/${name}/logout`, makeRequest('POST'));
+      const data = await resp.json();
+      if (data.end_session_url) {
+        // Open IdP logout in new tab — redirects back to /hugr/oauth/logout which auto-closes
+        window.open(data.end_session_url, '_blank');
+      }
+      await this._loadConnections();
+      this._showResult('<span class="hugr-cm-ok">Logged out</span>');
+      setTimeout(() => this._showResult(''), 3000);
+    } catch (e) {
+      console.error('Logout failed', e);
+    }
+  }
 
   /** Show a confirm dialog. Returns true if user clicks Delete, false on Cancel. */
   private _showConfirm(title: string, message: string): Promise<boolean> {

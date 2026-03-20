@@ -80,7 +80,7 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 		"code":            code,
 		"execution_count": execCount,
 	}
-	if err := k.sendIOPub( inputMsg); err != nil {
+	if err := k.sendIOPub(inputMsg); err != nil {
 		log.Printf("send execute_input error: %v", err)
 	}
 
@@ -193,13 +193,13 @@ func (k *Kernel) executeGraphQL(ctx context.Context, msg *Message, execCount int
 		displayMsg := NewMessage(msg, "display_data")
 		displayMsg.Content = map[string]any{
 			"data": map[string]any{
-				"text/plain":                          string(prettyBytes),
+				"text/plain":                       string(prettyBytes),
 				"application/vnd.hugr.result+json": metadata,
 			},
 			"metadata":  map[string]any{},
 			"transient": map[string]any{},
 		}
-		if err := k.sendIOPub( displayMsg); err != nil {
+		if err := k.sendIOPub(displayMsg); err != nil {
 			log.Printf("send display_data error: %v", err)
 		}
 		k.sendExecuteOK(msg, execCount)
@@ -216,10 +216,8 @@ func (k *Kernel) executeGraphQL(ctx context.Context, msg *Message, execCount int
 
 	if metadata != nil {
 		data := map[string]any{
-			"text/plain": textFallback,
-		}
-		if metadata != nil {
-			data["application/vnd.hugr.result+json"] = metadata
+			"text/plain":                       textFallback,
+			"application/vnd.hugr.result+json": metadata,
 		}
 
 		displayMsg := NewMessage(msg, "display_data")
@@ -228,7 +226,7 @@ func (k *Kernel) executeGraphQL(ctx context.Context, msg *Message, execCount int
 			"metadata":  map[string]any{},
 			"transient": map[string]any{},
 		}
-		if err := k.sendIOPub( displayMsg); err != nil {
+		if err := k.sendIOPub(displayMsg); err != nil {
 			log.Printf("send display_data error: %v", err)
 		}
 	} else if textFallback != "" {
@@ -238,7 +236,7 @@ func (k *Kernel) executeGraphQL(ctx context.Context, msg *Message, execCount int
 			"metadata":  map[string]any{},
 			"transient": map[string]any{},
 		}
-		if err := k.sendIOPub( displayMsg); err != nil {
+		if err := k.sendIOPub(displayMsg); err != nil {
 			log.Printf("send display_data error: %v", err)
 		}
 	}
@@ -266,7 +264,7 @@ func (k *Kernel) sendDisplayData(msg *Message, r *meta.CommandResult) {
 		"metadata":  map[string]any{},
 		"transient": map[string]any{},
 	}
-	if err := k.sendIOPub( displayMsg); err != nil {
+	if err := k.sendIOPub(displayMsg); err != nil {
 		log.Printf("send display_data error: %v", err)
 	}
 }
@@ -289,7 +287,7 @@ func (k *Kernel) sendExecuteError(msg *Message, execCount int, execErr error) {
 		"evalue":    execErr.Error(),
 		"traceback": []string{execErr.Error()},
 	}
-	if err := k.sendIOPub( errMsg); err != nil {
+	if err := k.sendIOPub(errMsg); err != nil {
 		log.Printf("send error error: %v", err)
 	}
 
@@ -364,11 +362,11 @@ func (k *Kernel) handleCompleteRequest(ctx context.Context, msg *Message) {
 	for i, item := range result.Items {
 		matches[i] = item.Label
 		hugrCompletions[i] = map[string]any{
-			"label":      item.Label,
-			"kind":       item.Kind,
-			"detail":     item.Detail,
+			"label":         item.Label,
+			"kind":          item.Kind,
+			"detail":        item.Detail,
 			"documentation": item.Documentation,
-			"insertText": item.InsertText,
+			"insertText":    item.InsertText,
 		}
 	}
 
@@ -470,4 +468,3 @@ func (k *Kernel) handleCommMessage(ctx context.Context, msg *Message) {
 	// Comm messages are used by the explorer extension.
 	// TODO: implement comm protocol for explorer
 }
-
