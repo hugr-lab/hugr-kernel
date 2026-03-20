@@ -124,6 +124,11 @@ func resolveInSelectionSet(ss ast.SelectionSet, code string, cursorPos int, pref
 		return ctx
 	}
 
+	// Check if cursor is inside a directive on this field
+	if ctx := resolveInDirective(field, code, cursorPos, prefix, opType, parentPath); ctx != nil {
+		return ctx
+	}
+
 	// Check if field has a selection set and cursor is inside it
 	if len(field.SelectionSet) > 0 {
 		// Only recurse if cursor is past the field name (and any arguments).
@@ -409,6 +414,122 @@ func buildInputPathInList(listVal *ast.Value, cursorPos int) []string {
 	// If it's an ObjectValue, recurse into it
 	if bestChild.Value.Kind == ast.ObjectValue {
 		return buildInputPath(bestChild.Value, cursorPos)
+	}
+
+	return nil
+}
+
+// resolveInDirective checks if the cursor is inside a directive's arguments on a field.
+// e.g., @cache(ttl: 60) or @skip(if: true)
+func resolveInDirective(field *ast.Field, code string, cursorPos int, prefix string, opType string, path []string) *CursorContext {
+	// Find @directive( pattern in the text between field args end and cursor position
+	argsEnd := field.Position.Start + len(field.Name)
+	if len(field.Arguments) > 0 {
+		for i := field.Position.Start; i < len(code) && i < cursorPos; i++ {
+			if code[i] == '(' {
+				cp := findMatchingCloseParen(code, i)
+				if cp >= 0 {
+					argsEnd = cp + 1
+				}
+				break
+			}
+		}
+	}
+
+	// Scan from argsEnd to cursorPos only — we're looking for a directive
+	// that the cursor is currently inside of.
+	scanStart := argsEnd
+	for scanStart < cursorPos {
+		// Find @
+		atPos := -1
+		for i := scanStart; i < cursorPos; i++ {
+			if code[i] == '@' {
+				atPos = i
+				break
+			}
+			if code[i] == '{' {
+				return nil // hit selection set
+			}
+		}
+		if atPos < 0 {
+			return nil
+		}
+
+		// Extract directive name after @
+		nameStart := atPos + 1
+		nameEnd := nameStart
+		for nameEnd < len(code) && isIdentByte(code[nameEnd]) {
+			nameEnd++
+		}
+		if nameEnd == nameStart {
+			scanStart = nameEnd + 1
+			continue
+		}
+		dirName := code[nameStart:nameEnd]
+
+		// Find the opening paren of directive args
+		parenPos := -1
+		for i := nameEnd; i < len(code); i++ {
+			if code[i] == '(' {
+				parenPos = i
+				break
+			}
+			if !isWhitespaceByte(code[i]) {
+				break // directive has no args
+			}
+		}
+
+		if parenPos < 0 || cursorPos <= parenPos {
+			// No args parens or cursor is before them
+			scanStart = nameEnd
+			continue
+		}
+
+		// Find closing paren
+		closeParen := findMatchingCloseParen(code, parenPos)
+		if closeParen >= 0 && cursorPos > closeParen {
+			// Cursor is after this directive's args, check next directive
+			scanStart = closeParen + 1
+			continue
+		}
+
+		// Cursor is inside @directive( ... )
+		argName := ""
+		hasColon := false
+		for _, dir := range field.Directives {
+			if dir.Name == dirName {
+				for _, arg := range dir.Arguments {
+					if arg.Position != nil && arg.Position.Start <= cursorPos {
+						argName = arg.Name
+						if hasColonBetween(code, arg.Position.Start, cursorPos) {
+							hasColon = true
+						}
+					}
+				}
+				break
+			}
+		}
+
+		if hasColon && argName != "" {
+			return &CursorContext{
+				Kind:          ContextDirectiveArg,
+				FieldPath:     copySlice(path),
+				Prefix:        prefix,
+				DirectiveName: dirName,
+				ArgumentName:  argName,
+				Depth:         len(path) + 1,
+				OperationType: opType,
+			}
+		}
+
+		return &CursorContext{
+			Kind:          ContextDirectiveArg,
+			FieldPath:     copySlice(path),
+			Prefix:        prefix,
+			DirectiveName: dirName,
+			Depth:         len(path) + 1,
+			OperationType: opType,
+		}
 	}
 
 	return nil

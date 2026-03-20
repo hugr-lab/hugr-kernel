@@ -60,6 +60,16 @@ func main() {
 	// Create connection manager
 	cm := connection.NewManager()
 
+	// Configure query timeout from environment
+	if env := os.Getenv("HUGR_QUERY_TIMEOUT"); env != "" {
+		if d, err := time.ParseDuration(env); err == nil {
+			cm.SetQueryTimeout(d)
+			log.Printf("Query timeout set to %s", d)
+		} else {
+			log.Printf("Warning: invalid HUGR_QUERY_TIMEOUT=%q: %v (using default %s)", env, err, connection.DefaultTimeout)
+		}
+	}
+
 	// Pre-populate connections from environment
 	loadConnectionsFromEnv(cm)
 
@@ -173,8 +183,15 @@ func loadConnectionsFromFile(cm *connection.Manager) {
 	var cfg struct {
 		Default     string `json:"default"`
 		Connections []struct {
-			Name string `json:"name"`
-			URL  string `json:"url"`
+			Name     string `json:"name"`
+			URL      string `json:"url"`
+			AuthType string `json:"auth_type"`
+			APIKey   string `json:"api_key"`
+			Token    string `json:"token"`
+			Tokens   *struct {
+				AccessToken string `json:"access_token"`
+				ExpiresAt   int64  `json:"expires_at"`
+			} `json:"tokens"`
 		} `json:"connections"`
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
@@ -187,6 +204,29 @@ func loadConnectionsFromFile(cm *connection.Manager) {
 			// Don't override env connections
 			if _, err := cm.Get(c.Name); err != nil {
 				cm.Add(c.Name, c.URL)
+				conn, _ := cm.Get(c.Name)
+				if conn == nil {
+					continue
+				}
+				switch c.AuthType {
+				case "browser":
+					if c.Tokens != nil && c.Tokens.AccessToken != "" {
+						expiresAt := time.Unix(c.Tokens.ExpiresAt, 0)
+						conn.SetBrowserToken(c.Tokens.AccessToken, expiresAt, configPath)
+						log.Printf("Loaded browser auth for %q (expires %s)", c.Name, expiresAt.Format(time.RFC3339))
+					} else {
+						conn.SetAuthMode(connection.AuthBrowser)
+						log.Printf("Loaded browser connection %q (no token yet)", c.Name)
+					}
+				case "api_key":
+					if c.APIKey != "" {
+						conn.SetAPIKey(c.APIKey)
+					}
+				case "bearer":
+					if c.Token != "" {
+						conn.SetBearerToken(c.Token)
+					}
+				}
 			}
 		}
 	}

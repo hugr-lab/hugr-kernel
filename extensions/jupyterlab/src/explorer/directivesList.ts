@@ -67,6 +67,24 @@ export class DirectivesListSection {
     this._loadDirectives();
   }
 
+  /**
+   * Scroll to and expand a directive by name.
+   */
+  scrollToDirective(name: string): void {
+    const header = this._container.querySelector(
+      `.hugr-dir-header[data-name="${name}"]`
+    ) as HTMLElement | null;
+    if (header) {
+      // Expand the directive
+      header.click();
+      // Scroll into view
+      header.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Brief highlight
+      header.classList.add('hugr-dir-highlight');
+      setTimeout(() => header.classList.remove('hugr-dir-highlight'), 1500);
+    }
+  }
+
   private async _loadDirectives(): Promise<void> {
     if (!this._client) {
       this._directives = [];

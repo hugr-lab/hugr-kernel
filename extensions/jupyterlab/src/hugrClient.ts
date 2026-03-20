@@ -8,10 +8,12 @@ import { tableFromIPC } from 'apache-arrow';
 export interface HugrClientOptions {
   /** Proxy URL: /hugr/proxy/{connectionName} */
   url: string;
-  authType: 'public' | 'api_key' | 'bearer';
+  authType: 'public' | 'api_key' | 'bearer' | 'browser';
   apiKey?: string;
   token?: string;
   role?: string;
+  /** Connection name — required for browser auth to fetch tokens */
+  connectionName?: string;
   /** Request timeout in milliseconds, default 10000 */
   timeout?: number;
 }
@@ -192,12 +194,14 @@ function setNested(
 
 export class HugrClient {
   private _url: string;
-  private _authType: 'public' | 'api_key' | 'bearer';
+  private _authType: 'public' | 'api_key' | 'bearer' | 'browser';
   private _apiKey?: string;
   private _token?: string;
   private _role?: string;
   private _timeout: number;
   private _controllers: Set<AbortController> = new Set();
+  private _connectionName?: string;
+  private _cachedBrowserToken?: { access_token: string; expires_at: number };
 
   constructor(options: HugrClientOptions) {
     this._url = options.url;
@@ -205,6 +209,7 @@ export class HugrClient {
     this._apiKey = options.apiKey;
     this._token = options.token;
     this._role = options.role;
+    this._connectionName = options.connectionName;
     this._timeout = options.timeout ?? 10000;
   }
 
@@ -219,9 +224,55 @@ export class HugrClient {
     } else if (authType === 'bearer') {
       this._token = credential;
       this._apiKey = undefined;
+    } else if (authType === 'browser') {
+      this._apiKey = undefined;
+      this._token = undefined;
+      this._cachedBrowserToken = undefined;
     } else {
       this._apiKey = undefined;
       this._token = undefined;
+    }
+  }
+
+  /**
+   * Fetch a browser auth token from the connection service.
+   * Caches the token and re-fetches when near expiry (< 30s).
+   */
+  private async _fetchBrowserToken(): Promise<string | undefined> {
+    if (!this._connectionName) {
+      return undefined;
+    }
+
+    // Use cached token if still valid (> 30s until expiry)
+    if (this._cachedBrowserToken) {
+      const ttl = this._cachedBrowserToken.expires_at - Date.now() / 1000;
+      if (ttl > 30) {
+        return this._cachedBrowserToken.access_token;
+      }
+    }
+
+    const headers: Record<string, string> = {};
+    const xsrf = getXsrfToken();
+    if (xsrf) {
+      headers['X-XSRFToken'] = xsrf;
+    }
+
+    try {
+      const resp = await fetch(
+        `/hugr/connections/${encodeURIComponent(this._connectionName)}/token`,
+        { headers }
+      );
+      if (!resp.ok) {
+        return undefined;
+      }
+      const data = await resp.json();
+      this._cachedBrowserToken = {
+        access_token: data.access_token,
+        expires_at: data.expires_at,
+      };
+      return data.access_token;
+    } catch {
+      return undefined;
     }
   }
 
@@ -253,7 +304,12 @@ export class HugrClient {
       };
 
       // Auth headers
-      if (this._authType === 'api_key' && this._apiKey) {
+      if (this._authType === 'browser') {
+        const browserToken = await this._fetchBrowserToken();
+        if (browserToken) {
+          headers['Authorization'] = `Bearer ${browserToken}`;
+        }
+      } else if (this._authType === 'api_key' && this._apiKey) {
         headers['X-Api-Key'] = this._apiKey;
       } else if (this._authType === 'bearer' && this._token) {
         headers['Authorization'] = `Bearer ${this._token}`;

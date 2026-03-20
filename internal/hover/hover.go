@@ -49,6 +49,10 @@ func (ins *Inspector) Inspect(ctx context.Context, conn *connection.Connection, 
 		return ins.inspectArgument(ctx, conn, cctx.FieldPath, cctx.ParentField, token, cctx.OperationType)
 	case completion.ContextArgumentValue:
 		return ins.inspectArgumentValue(ctx, conn, cctx, token)
+	case completion.ContextDirective:
+		return ins.inspectDirective(ctx, conn, token)
+	case completion.ContextDirectiveArg:
+		return ins.inspectDirectiveArg(ctx, conn, cctx.DirectiveName, token)
 	default:
 		// Try field lookup as fallback
 		return ins.inspectField(ctx, conn, cctx.FieldPath, token, cctx.OperationType)
@@ -219,6 +223,68 @@ func (ins *Inspector) inspectInputFieldFromType(ti *schema.TypeInfo, token strin
 	return nil
 }
 
+func (ins *Inspector) inspectDirective(ctx context.Context, conn *connection.Connection, name string) *Result {
+	directives, err := ins.Schema.GetDirectives(ctx, conn)
+	if err != nil {
+		return nil
+	}
+	for _, d := range directives {
+		if d.Name == name {
+			md := fmt.Sprintf("### %s\n", directiveLink(d.Name))
+			plain := "@" + d.Name
+			if d.Description != "" {
+				md += "\n" + d.Description + "\n"
+				plain += "\n" + d.Description
+			}
+			if len(d.Locations) > 0 {
+				md += "\n**Locations**: " + strings.Join(d.Locations, ", ")
+			}
+			if len(d.Args) > 0 {
+				var argStrs []string
+				for _, a := range d.Args {
+					argStrs = append(argStrs, fmt.Sprintf("%s: %s", a.Name, typeLink(a.Type.Format(), a.Type.UnwrapName())))
+				}
+				md += "\n**Arguments**: " + strings.Join(argStrs, ", ") + "\n"
+			}
+			return &Result{Found: true, Markdown: md, Plain: plain}
+		}
+	}
+	return nil
+}
+
+func (ins *Inspector) inspectDirectiveArg(ctx context.Context, conn *connection.Connection, directiveName, argName string) *Result {
+	directives, err := ins.Schema.GetDirectives(ctx, conn)
+	if err != nil {
+		return nil
+	}
+	for _, d := range directives {
+		if d.Name != directiveName {
+			continue
+		}
+		for _, a := range d.Args {
+			if a.Name == argName {
+				md := fmt.Sprintf("### `%s`: %s\n", a.Name, typeLink(a.Type.Format(), a.Type.UnwrapName()))
+				plain := fmt.Sprintf("%s: %s", a.Name, a.Type.Format())
+				if a.Description != "" {
+					md += "\n" + a.Description + "\n"
+					plain += "\n" + a.Description
+				}
+				if a.DefaultValue != nil {
+					md += fmt.Sprintf("\n**Default**: `%s`", *a.DefaultValue)
+				}
+				md += "\n**Directive**: " + directiveLink(directiveName)
+				return &Result{Found: true, Markdown: md, Plain: plain}
+			}
+		}
+		// Token might be the directive name itself
+		if argName == "" || argName == directiveName {
+			return ins.inspectDirective(ctx, conn, directiveName)
+		}
+		break
+	}
+	return nil
+}
+
 // extractToken finds the identifier token at or near the cursor position.
 func extractToken(code string, pos int) (token string, start, end int) {
 	if pos > len(code) {
@@ -241,6 +307,10 @@ func extractToken(code string, pos int) (token string, start, end int) {
 		return "", 0, 0
 	}
 	return code[start:end], start, end
+}
+
+func directiveLink(name string) string {
+	return "[`@" + name + "`](hugr-directive:" + name + ")"
 }
 
 func isIdentChar(ch byte) bool {

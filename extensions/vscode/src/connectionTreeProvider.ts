@@ -17,12 +17,14 @@ import * as os from 'os';
 import * as http from 'http';
 import * as https from 'https';
 import { HugrClient } from './explorer/hugrClient';
+import * as oidc from './oidc';
 
 export interface ConnectionEntry {
   name: string;
   url: string;
   auth_type?: string;
   auth_credential?: string;
+  tokens?: { access_token: string; expires_at: number };
   [key: string]: unknown; // preserve extra fields (created_at, etc.)
 }
 
@@ -44,15 +46,20 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
   private _prevDefaultName = '';
   private _watcher: fs.FSWatcher | null = null;
   private _extraFields: Record<string, unknown> = {}; // preserve kernels, etc.
+  private _secrets: vscode.SecretStorage;
 
-  constructor() {
+  constructor(secrets: vscode.SecretStorage) {
+    this._secrets = secrets;
     this._load();
     this._watchFile();
+    // Restore OIDC sessions from connections.json
+    oidc.restoreSessionsOnStartup(secrets, () => this._fireTreeChange());
   }
 
   dispose(): void {
     this._watcher?.close();
     this._onDidChangeDefault.dispose();
+    oidc.disposeAll();
   }
 
   refresh(): void {
@@ -74,6 +81,28 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
     const conn = this._connections.find(c => c.name === name);
     if (!conn) return null;
 
+    if (conn.auth_type === 'browser') {
+      // For browser auth, read token from OIDC session or connections.json
+      const tokenData = oidc.getToken(name);
+      if (tokenData) {
+        return new HugrClient({
+          url: conn.url,
+          authType: 'bearer',
+          token: tokenData.access_token,
+        });
+      }
+      // Fallback: read from connections.json tokens field
+      if (conn.tokens?.access_token) {
+        return new HugrClient({
+          url: conn.url,
+          authType: 'bearer',
+          token: conn.tokens.access_token,
+        });
+      }
+      // Not authenticated — return public client (queries will fail with auth error)
+      return new HugrClient({ url: conn.url, authType: 'public' });
+    }
+
     return new HugrClient({
       url: conn.url,
       authType: (conn.auth_type as any) ?? 'public',
@@ -84,12 +113,35 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
 
   getTreeItem(element: ConnectionEntry): vscode.TreeItem {
     const isDefault = element.name === this._defaultName;
+    const isBrowser = element.auth_type === 'browser';
+    const authenticated = isBrowser ? oidc.isAuthenticated(element.name) : false;
+
     const item = new vscode.TreeItem(element.name, vscode.TreeItemCollapsibleState.None);
+
     const authLabel = element.auth_type && element.auth_type !== 'public' ? ` [${element.auth_type}]` : '';
+    const authStatus = isBrowser ? (authenticated ? ' $(pass-filled)' : ' $(error)') : '';
+
     item.description = element.url + authLabel;
-    item.tooltip = `${element.name}\n${element.url}${authLabel}${isDefault ? '\n★ default' : ''}`;
-    item.iconPath = new vscode.ThemeIcon(isDefault ? 'star-full' : 'plug');
-    item.contextValue = 'connection';
+    item.tooltip = `${element.name}\n${element.url}${authLabel}${isDefault ? '\n★ default' : ''}${isBrowser ? (authenticated ? '\n✓ authenticated' : '\n✗ not authenticated') : ''}`;
+
+    if (isBrowser) {
+      item.iconPath = new vscode.ThemeIcon(
+        isDefault ? 'star-full' : (authenticated ? 'pass-filled' : 'error'),
+        authenticated
+          ? new vscode.ThemeColor('testing.iconPassed')
+          : new vscode.ThemeColor('testing.iconFailed'),
+      );
+    } else {
+      item.iconPath = new vscode.ThemeIcon(isDefault ? 'star-full' : 'plug');
+    }
+
+    // Set contextValue to control menu visibility
+    if (isBrowser) {
+      item.contextValue = authenticated ? 'connection_browser_auth' : 'connection_browser_noauth';
+    } else {
+      item.contextValue = 'connection';
+    }
+
     return item;
   }
 
@@ -123,12 +175,69 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
     });
     if (!url) return;
 
-    const entry: ConnectionEntry = { name: name.trim(), url: url.trim() };
+    // Auto-discover OIDC
+    let detectedOidc = false;
+    try {
+      const authConfig = await oidc.discoverAuthConfig(url.trim());
+      if (authConfig) {
+        detectedOidc = true;
+      }
+    } catch { /* ignore */ }
+
+    // Ask for auth type
+    const authOptions = [
+      { label: 'Public', value: 'public', description: 'No authentication' },
+      { label: 'API Key', value: 'api_key', description: 'X-Api-Key header' },
+      { label: 'Bearer Token', value: 'bearer', description: 'Authorization: Bearer header' },
+      { label: 'Browser (OIDC)', value: 'browser', description: detectedOidc ? 'OIDC detected on this server' : 'OIDC login via browser' },
+    ];
+
+    const selectedAuth = await vscode.window.showQuickPick(authOptions, {
+      placeHolder: detectedOidc ? 'Auth type (OIDC detected)' : 'Auth type',
+    });
+    if (!selectedAuth) return;
+
+    const entry: ConnectionEntry = {
+      name: name.trim(),
+      url: url.trim(),
+      auth_type: selectedAuth.value,
+    };
+
+    // Ask for credential if needed
+    if (selectedAuth.value === 'api_key') {
+      const key = await vscode.window.showInputBox({
+        prompt: 'API Key',
+        password: true,
+        placeHolder: 'sk-...',
+      });
+      if (!key) return;
+      entry.auth_credential = key;
+    } else if (selectedAuth.value === 'bearer') {
+      const token = await vscode.window.showInputBox({
+        prompt: 'Bearer Token',
+        password: true,
+        placeHolder: 'eyJ...',
+      });
+      if (!token) return;
+      entry.auth_credential = token;
+    }
+
     this._connections.push(entry);
     if (this._connections.length === 1) {
       this._defaultName = entry.name;
     }
     this._save();
+
+    // For browser connections, start login flow
+    if (selectedAuth.value === 'browser') {
+      try {
+        await oidc.startLogin(entry.name, entry.url, this._secrets, () => this._fireTreeChange());
+        vscode.window.showInformationMessage(`${entry.name}: logged in`);
+        this._load();
+      } catch (e: any) {
+        vscode.window.showWarningMessage(`Saved, but login failed: ${e.message}`);
+      }
+    }
   }
 
   async editConnection(entry: ConnectionEntry): Promise<void> {
@@ -156,6 +265,11 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
     );
     if (answer !== 'Remove') return;
 
+    // Logout if browser connection
+    if (entry.auth_type === 'browser') {
+      await oidc.logout(entry.name, this._secrets);
+    }
+
     this._connections = this._connections.filter(c => c.name !== entry.name);
     if (this._defaultName === entry.name) {
       this._defaultName = this._connections.length > 0 ? this._connections[0].name : '';
@@ -170,15 +284,35 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
   }
 
   async testConnection(entry: ConnectionEntry): Promise<void> {
+    if (entry.auth_type === 'browser' && !oidc.isAuthenticated(entry.name)) {
+      vscode.window.showWarningMessage(`${entry.name}: not authenticated — please login first`);
+      return;
+    }
+
     await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: `Testing ${entry.name}...` },
       async () => {
         try {
-          // Same query as query-engine/client Ping() — sent to IPC endpoint
           const body = JSON.stringify({
             query: '{ function { core { info { version } } } }',
           });
-          const raw = await httpPost(entry.url, body);
+          const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+          };
+
+          // Add auth headers
+          if (entry.auth_type === 'api_key' && entry.auth_credential) {
+            headers['X-Api-Key'] = entry.auth_credential;
+          } else if (entry.auth_type === 'bearer' && entry.auth_credential) {
+            headers['Authorization'] = `Bearer ${entry.auth_credential}`;
+          } else if (entry.auth_type === 'browser') {
+            const tokenData = oidc.getToken(entry.name);
+            if (tokenData) {
+              headers['Authorization'] = `Bearer ${tokenData.access_token}`;
+            }
+          }
+
+          const raw = await httpPost(entry.url, body, headers);
           const version = parseIpcVersion(raw);
           if (version) {
             vscode.window.showInformationMessage(`${entry.name}: Hugr v${version}`);
@@ -190,6 +324,39 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
         }
       },
     );
+  }
+
+  async loginConnection(entry: ConnectionEntry): Promise<void> {
+    if (entry.auth_type !== 'browser') {
+      vscode.window.showWarningMessage('Login is only available for browser (OIDC) connections');
+      return;
+    }
+
+    try {
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Logging in to ${entry.name}...`, cancellable: false },
+        async () => {
+          await oidc.startLogin(entry.name, entry.url, this._secrets, () => this._fireTreeChange());
+        },
+      );
+      vscode.window.showInformationMessage(`${entry.name}: logged in`);
+      this._load();
+    } catch (e: any) {
+      vscode.window.showErrorMessage(`Login failed: ${e.message}`);
+    }
+  }
+
+  async logoutConnection(entry: ConnectionEntry): Promise<void> {
+    if (entry.auth_type !== 'browser') return;
+
+    const endSessionUrl = await oidc.logout(entry.name, this._secrets);
+    if (endSessionUrl) {
+      vscode.env.openExternal(vscode.Uri.parse(endSessionUrl));
+    } else {
+      console.warn('No end_session_url returned — IdP session not cleared');
+    }
+    vscode.window.showInformationMessage(`${entry.name}: logged out`);
+    this._load();
   }
 
   // --- File I/O ---
@@ -233,6 +400,10 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
     this._fireDefaultChangeIfNeeded();
   }
 
+  private _fireTreeChange(): void {
+    this._onDidChangeTreeData.fire(undefined);
+  }
+
   private _fireDefaultChangeIfNeeded(): void {
     if (this._defaultName !== this._prevDefaultName) {
       this._prevDefaultName = this._defaultName;
@@ -261,16 +432,18 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
 /**
  * POST to the IPC endpoint and return raw multipart body.
  */
-function httpPost(url: string, body: string): Promise<string> {
+function httpPost(url: string, body: string, extraHeaders?: Record<string, string>): Promise<string> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const mod = parsed.protocol === 'https:' ? https : http;
+    const headers: Record<string, string | number> = {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body),
+      ...extraHeaders,
+    };
     const req = mod.request(parsed, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(body),
-      },
+      headers,
       timeout: 5000,
     }, (res) => {
       let data = '';

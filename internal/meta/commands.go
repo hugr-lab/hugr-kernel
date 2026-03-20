@@ -128,6 +128,10 @@ func authCommand(cm *connection.Manager) CommandFunc {
 			return nil, fmt.Errorf("usage: :auth <mode> (public, apikey, bearer, oidc)")
 		}
 
+		if connection.AuthMode(mode) == connection.AuthBrowser {
+			return nil, fmt.Errorf("browser auth cannot be set via :auth — use the connection manager UI")
+		}
+
 		conn := cm.GetDefault()
 		if conn == nil {
 			return nil, fmt.Errorf("no connection configured")
@@ -205,11 +209,16 @@ func loginCommand(cm *connection.Manager) CommandFunc {
 		if err != nil {
 			return nil, err
 		}
+
+		if conn.AuthMode == connection.AuthBrowser {
+			return nil, fmt.Errorf("browser auth is not supported via :login — use the connection manager UI to login")
+		}
+
 		if conn.AuthMode != connection.AuthOIDC {
 			return nil, fmt.Errorf("connection %q is not configured for OIDC. Run: :auth oidc", name)
 		}
 
-		// TODO: Implement OIDC browser flow
+		// TODO: Implement OIDC device flow for kernel
 		return &CommandResult{
 			Text: fmt.Sprintf("OIDC login not yet implemented for: %s", name),
 		}, nil
@@ -308,12 +317,58 @@ func whoamiCommand(cm *connection.Manager) CommandFunc {
 			return &CommandResult{Text: "No connection configured."}, nil
 		}
 
+		jsonData := map[string]any{
+			"connection": conn.Name,
+			"auth_mode":  string(conn.AuthMode),
+		}
+
+		// Query Hugr server for authenticated user info
+		resp, err := conn.Query(ctx, `{ function { core { auth { me { user_id user_name role auth_type auth_provider } } } } }`, nil)
+		if err == nil && resp != nil {
+			var me struct {
+				UserID       string `json:"user_id"`
+				UserName     string `json:"user_name"`
+				Role         string `json:"role"`
+				AuthType     string `json:"auth_type"`
+				AuthProvider string `json:"auth_provider"`
+			}
+			if scanErr := resp.ScanData("function.core.auth.me", &me); scanErr == nil {
+				jsonData["user_id"] = me.UserID
+				jsonData["user_name"] = me.UserName
+				jsonData["role"] = me.Role
+				jsonData["auth_type"] = me.AuthType
+				jsonData["auth_provider"] = me.AuthProvider
+
+				return &CommandResult{
+					Text: fmt.Sprintf("Connection: %s\nUser: %s\nRole: %s\nAuth: %s (%s)",
+						conn.Name, me.UserName, me.Role, me.AuthType, me.AuthProvider),
+					JSON: jsonData,
+				}, nil
+			}
+		}
+
+		// Fallback: no server info available
+		if conn.AuthMode == connection.AuthBrowser {
+			authenticated := conn.IsAuthenticated()
+			authStatus := "not authenticated"
+			if authenticated {
+				authStatus = "authenticated"
+			}
+			jsonData["authenticated"] = authenticated
+			errMsg := ""
+			if err != nil {
+				errMsg = fmt.Sprintf("\nError: %s", err)
+			}
+			return &CommandResult{
+				Text: fmt.Sprintf("Connection: %s\nAuth mode: browser\nStatus: %s%s",
+					conn.Name, authStatus, errMsg),
+				JSON: jsonData,
+			}, nil
+		}
+
 		return &CommandResult{
 			Text: fmt.Sprintf("Connection: %s\nAuth mode: %s", conn.Name, conn.AuthMode),
-			JSON: map[string]any{
-				"connection": conn.Name,
-				"auth_mode":  string(conn.AuthMode),
-			},
+			JSON: jsonData,
 		}, nil
 	}
 }
