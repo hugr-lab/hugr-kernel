@@ -36,18 +36,31 @@ export async function graphqlHoverSource(
         dom.className = 'hugr-hover-tooltip';
         dom.innerHTML = markdownToHtml(markdown);
 
-        // Make hugr-type: links clickable → navigate to Types search or open detail modal
+        // Make hugr-type: and hugr-directive: links clickable
         dom.addEventListener('click', (e) => {
           const target = e.target as HTMLElement;
-          const anchor = target.closest('a[href^="hugr-type:"]') as HTMLAnchorElement | null;
-          if (anchor) {
+          const typeAnchor = target.closest('a[href^="hugr-type:"]') as HTMLAnchorElement | null;
+          if (typeAnchor) {
             e.preventDefault();
             e.stopPropagation();
-            const typeName = anchor.getAttribute('href')!.replace('hugr-type:', '');
+            const typeName = typeAnchor.getAttribute('href')!.replace('hugr-type:', '');
             dom.dispatchEvent(
               new CustomEvent('hugr-types-search', {
                 bubbles: true,
                 detail: { query: typeName },
+              })
+            );
+            return;
+          }
+          const dirAnchor = target.closest('a[href^="hugr-directive:"]') as HTMLAnchorElement | null;
+          if (dirAnchor) {
+            e.preventDefault();
+            e.stopPropagation();
+            const dirName = dirAnchor.getAttribute('href')!.replace('hugr-directive:', '');
+            dom.dispatchEvent(
+              new CustomEvent('hugr-directive-search', {
+                bubbles: true,
+                detail: { query: dirName },
               })
             );
           }
@@ -76,6 +89,11 @@ function markdownToHtml(md: string): string {
     .replace(/\[`(.+?)`\]\((hugr-type:[^)]+)\)/g,
       '<a href="$2" class="hugr-type-link"><code>$1</code></a>')
     .replace(/\[(.+?)\]\((hugr-type:[^)]+)\)/g,
+      '<a href="$2" class="hugr-type-link">$1</a>')
+    // Directive links: [`@name`](hugr-directive:X)
+    .replace(/\[`(.+?)`\]\((hugr-directive:[^)]+)\)/g,
+      '<a href="$2" class="hugr-type-link"><code>$1</code></a>')
+    .replace(/\[(.+?)\]\((hugr-directive:[^)]+)\)/g,
       '<a href="$2" class="hugr-type-link">$1</a>')
     // Headings: ### text → <strong>
     .replace(/^### (.+)$/gm, '<strong>$1</strong>')

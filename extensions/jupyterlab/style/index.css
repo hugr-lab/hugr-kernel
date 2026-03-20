@@ -489,6 +489,10 @@
 }
 
 /* ── Hover tooltip ── */
+.cm-tooltip-hover {
+  pointer-events: auto !important;
+}
+
 .hugr-hover-tooltip {
   padding: 8px 12px;
   max-width: 400px;
@@ -827,6 +831,12 @@
 .hugr-dir-header:hover {
   background: var(--jp-layout-color2);
   border-radius: 3px;
+}
+
+.hugr-dir-highlight {
+  background: var(--jp-brand-color3, rgba(33, 150, 243, 0.15));
+  border-radius: 3px;
+  transition: background 0.3s ease;
 }
 
 .hugr-dir-name {

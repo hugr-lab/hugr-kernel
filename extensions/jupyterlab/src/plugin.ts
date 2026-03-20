@@ -97,6 +97,25 @@ const explorerPlugin: JupyterFrontEndPlugin<void> = {
       }
     }) as EventListener);
 
+    // Listen for directive navigation requests from within the explorer
+    explorer.node.addEventListener('hugr-directive-search', ((e: CustomEvent) => {
+      e.stopPropagation();
+      if (directivesList) {
+        directivesList.scrollToDirective(e.detail.query);
+      }
+    }) as EventListener);
+
+    // Listen at document level for directive navigation from hover tooltips
+    document.addEventListener('hugr-directive-search', ((e: CustomEvent) => {
+      if (!explorer.isVisible) {
+        app.shell.add(explorer, 'right', { rank: 100 });
+      }
+      app.shell.activateById(explorer.id);
+      if (directivesList) {
+        explorer.navigateToDirectives(e.detail.query);
+      }
+    }) as EventListener);
+
     const loadConnections = async () => {
       try {
         const resp = await fetch('/hugr/connections');

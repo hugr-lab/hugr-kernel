@@ -86,6 +86,21 @@ export class HugrExplorerWidget extends Widget {
     );
   }
 
+  /**
+   * Switch to the Directives tab and highlight a specific directive.
+   * Enables cross-reference navigation from hover tooltips.
+   */
+  navigateToDirectives(directiveName: string): void {
+    this._onTabClick('directives');
+
+    this.node.dispatchEvent(
+      new CustomEvent('hugr-directive-search', {
+        bubbles: true,
+        detail: { query: directiveName }
+      })
+    );
+  }
+
   getSectionContainer(section: SectionName): HTMLElement | null {
     switch (section) {
       case 'schema':

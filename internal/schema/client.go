@@ -4,7 +4,6 @@ package schema
 import (
 	"container/list"
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -371,28 +370,13 @@ func (c *Client) GetDirectives(ctx context.Context, conn *connection.Connection)
 		}
 
 		// Parse __schema.directives
-		raw := resp.DataPart("__schema")
-		if raw == nil {
-			return nil, nil
+		var schemaResult struct {
+			Directives []DirectiveInfo `json:"directives"`
 		}
-		schemaMap, ok := raw.(map[string]any)
-		if !ok {
-			return nil, nil
-		}
-		dirsRaw, ok := schemaMap["directives"]
-		if !ok {
-			return nil, nil
-		}
-
-		// Re-marshal and unmarshal to get typed directives
-		b, err := json.Marshal(dirsRaw)
-		if err != nil {
+		if err := resp.ScanData("__schema", &schemaResult); err != nil {
 			return nil, err
 		}
-		var dirs []DirectiveInfo
-		if err := json.Unmarshal(b, &dirs); err != nil {
-			return nil, err
-		}
+		dirs := schemaResult.Directives
 
 		c.mu.Lock()
 		c.directives = &cacheEntry[[]DirectiveInfo]{value: dirs, expiresAt: time.Now().Add(c.ttl)}
