@@ -159,8 +159,6 @@ def _generate_pkce() -> tuple[str, str]:
     """Generate PKCE code_verifier and code_challenge (S256)."""
     verifier = secrets.token_urlsafe(64)
     digest = hashlib.sha256(verifier.encode("ascii")).digest()
-    challenge = secrets.token_urlsafe(0)  # placeholder
-    # Base64url-encode the SHA256 digest
     import base64
     challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
     return verifier, challenge

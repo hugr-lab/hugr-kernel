@@ -50,7 +50,7 @@ func TestDirectiveContextDebug(t *testing.T) {
 	for _, tt := range tests {
 		ctx := ResolveCursorContext(code, tt.pos)
 		kindStr := kindName(ctx.Kind)
-		fmt.Printf("%-30s pos=%-4d kind=%-20s path=%v dir=%q arg=%q prefix=%q\n",
+		t.Logf("%-30s pos=%-4d kind=%-20s path=%v dir=%q arg=%q prefix=%q",
 			tt.label, tt.pos, kindStr, ctx.FieldPath, ctx.DirectiveName, ctx.ArgumentName, ctx.Prefix)
 		if ctx.Kind != tt.wantKind {
 			t.Errorf("%s: got kind=%s, want %s", tt.label, kindStr, kindName(tt.wantKind))

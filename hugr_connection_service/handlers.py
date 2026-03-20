@@ -402,12 +402,6 @@ class OAuthCallbackHandler(JupyterHandler):
         try:
             session = oidc.exchange_code(state, code)
         except ValueError as e:
-            # If this was a test flow, record the error
-            for tid, tr in _test_results.items():
-                if tr.get("status") == "pending":
-                    ps = oidc._pending.get(state)
-                    if ps and ps.connection_name == tid:
-                        _test_results[tid] = {"status": "error", "error": str(e)}
             self.set_status(400)
             self.finish(f"<html><body><h2>Login failed</h2><p>{e}</p></body></html>")
             return
