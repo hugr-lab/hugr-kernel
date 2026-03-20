@@ -1,6 +1,6 @@
 # Hugr GraphQL Kernel
 
-A Jupyter kernel for executing [Hugr](https://github.com/hugr-lab/hugr) GraphQL queries, built in Go.
+A Jupyter kernel for executing [Hugr](https://github.com/hugr-lab/hugr) GraphQL queries, built in Go. Includes IDE extensions for JupyterLab and VS Code with schema explorer, autocomplete, hover, and diagnostics.
 
 ## Features
 
@@ -11,6 +11,7 @@ A Jupyter kernel for executing [Hugr](https://github.com/hugr-lab/hugr) GraphQL 
 - **Multipart results** — Arrow tables (Perspective viewer), JSON (tree viewer), errors
 - **Streaming** — large datasets streamed via Apache Arrow IPC
 - **Meta commands** — `:connect`, `:use`, `:auth`, `:status`, `:setvars`, and more
+- **IDE features** — autocomplete, hover info, diagnostics, schema explorer (JupyterLab & VS Code)
 
 ## Quick Install
 
@@ -30,6 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/hugr-lab/hugr-kernel/main/install.s
 
 - Go 1.23+
 - [uv](https://docs.astral.sh/uv/) — Python package manager
+- Node.js 18+ (for VS Code extension)
 
 ### Build and install
 
@@ -50,6 +52,21 @@ uv pip install hugr-perspective-viewer
 uv run jupyter lab
 ```
 
+### VS Code Extension
+
+The Hugr GraphQL IDE extension for VS Code provides a schema explorer, types search, directives browser, and type detail panels.
+
+```bash
+cd extensions/vscode
+npm install && npm run build
+
+# Package and install
+npx @vscode/vsce package --no-dependencies
+code --install-extension hugr-graphql-ide-*.vsix
+```
+
+You also need the [HUGR Result Viewer](https://marketplace.visualstudio.com/items?itemName=hugr-lab.hugr-result-renderer) extension for rendering query results.
+
 ### Overriding the JupyterLab extension from source
 
 If you are developing the [Perspective viewer extension](https://github.com/hugr-lab/duckdb-kernel/tree/main/extensions/jupyterlab) and want to use a local build instead of the PyPI version:
@@ -65,17 +82,6 @@ EXT_DIR=$(find .venv -path "*/labextensions/@hugr-lab/perspective-viewer" -type 
 rm -rf "$EXT_DIR/static"
 cp -r ../duckdb-kernel/extensions/jupyterlab/hugr_perspective/labextension/static "$EXT_DIR/static"
 cp ../duckdb-kernel/extensions/jupyterlab/hugr_perspective/labextension/package.json "$EXT_DIR/package.json"
-```
-
-### VS Code
-
-Install the [HUGR Result Viewer](https://marketplace.visualstudio.com/items?itemName=hugr-lab.hugr-result-renderer) extension from the VS Code Marketplace, or build from source:
-
-```bash
-cd ../duckdb-kernel/extensions/vscode
-npm install && npm run build
-npx @vscode/vsce package --no-dependencies
-code --install-extension hugr-result-renderer-*.vsix
 ```
 
 ## Usage
@@ -127,6 +133,8 @@ code --install-extension hugr-result-renderer-*.vsix
 
 ## Architecture
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for a detailed description of the project structure, data flows, and extension architecture.
+
 The kernel is a thin orchestration layer — it delegates query execution to the [Hugr Go client](https://github.com/hugr-lab/query-engine) and rendering to frontend extensions.
 
 ```
@@ -137,6 +145,12 @@ internal/session/                  # Session variables, execution counter
 internal/meta/                     # Meta command parser and registry
 internal/result/                   # Multipart response → viewer metadata
 internal/renderer/                 # ASCII table fallback
+internal/completion/               # GraphQL autocomplete (AST-based)
+internal/hover/                    # Hover information provider
+internal/schema/                   # Schema introspection client with caching
+extensions/jupyterlab/             # JupyterLab GraphQL IDE extension
+extensions/vscode/                 # VS Code GraphQL IDE extension
+hugr_connection_service/           # Jupyter server extension for connection management
 ```
 
 ## CI/CD
