@@ -119,7 +119,7 @@ const explorerPlugin: JupyterFrontEndPlugin<void> = {
     const loadConnections = async () => {
       try {
         const baseUrl = app.serviceManager.serverSettings.baseUrl;
-        const resp = await fetch(baseUrl + 'hugr/connections');
+        const resp = await fetch(baseUrl + 'hugr/connections', { credentials: 'same-origin' });
         const connections = await resp.json();
         const defaultConn = connections.find((c: any) => c.status === 'default');
         explorer.setConnections(connections, defaultConn?.name || null);

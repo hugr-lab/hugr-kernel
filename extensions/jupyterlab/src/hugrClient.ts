@@ -261,7 +261,7 @@ export class HugrClient {
     try {
       const resp = await fetch(
         `${PageConfig.getBaseUrl()}hugr/connections/${encodeURIComponent(this._connectionName)}/token`,
-        { headers }
+        { headers, credentials: 'same-origin' }
       );
       if (!resp.ok) {
         return undefined;

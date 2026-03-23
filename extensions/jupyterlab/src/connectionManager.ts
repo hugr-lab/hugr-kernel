@@ -42,9 +42,15 @@ function makeRequest(method: string, body?: any): RequestInit {
   }
   return {
     method,
+    credentials: 'same-origin',
     headers,
     ...(body ? { body: JSON.stringify(body) } : {}),
   };
+}
+
+/** fetch with credentials (needed for JupyterHub OAuth proxy) */
+function hugrFetch(url: string, init?: RequestInit): Promise<Response> {
+  return fetch(url, { credentials: 'same-origin', ...init });
 }
 
 const ICON_LOGIN = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>`;
@@ -96,7 +102,7 @@ export class ConnectionManagerWidget extends Widget {
 
   private async _loadConnections(): Promise<void> {
     try {
-      const resp = await fetch(`${BASE_URL}/connections`);
+      const resp = await hugrFetch(`${BASE_URL}/connections`);
       this._connections = await resp.json();
       this._renderList();
       this._startAuthMonitor();
@@ -128,7 +134,7 @@ export class ConnectionManagerWidget extends Widget {
     this._authMonitorTimer = setInterval(async () => {
       for (const c of this._connections.filter(conn => conn.auth_type === 'browser')) {
         try {
-          const resp = await fetch(`${BASE_URL}/connections/${c.name}/auth`);
+          const resp = await hugrFetch(`${BASE_URL}/connections/${c.name}/auth`);
           const data = await resp.json();
           const wasAuthenticated = this._previousAuthState.get(c.name) ?? false;
           if (wasAuthenticated && !data.authenticated) {
@@ -312,7 +318,7 @@ export class ConnectionManagerWidget extends Widget {
       const url = urlInput.value.trim();
       if (!url || authSelect.value !== 'public') return;
       try {
-        const resp = await fetch(`${BASE_URL}/discover`, makeRequest('POST', { url }));
+        const resp = await hugrFetch(`${BASE_URL}/discover`, makeRequest('POST', { url }));
         if (resp.ok) {
           const data = await resp.json();
           if (data.oidc_available) {
@@ -345,9 +351,9 @@ export class ConnectionManagerWidget extends Widget {
       if (vals.auth_type === 'api_key') body.api_key = vals.credential;
       if (vals.auth_type === 'bearer') body.token = vals.credential;
       if (vals.role) body.role = vals.role;
-      let resp = await fetch(`${BASE_URL}/connections`, makeRequest('POST', body));
+      let resp = await hugrFetch(`${BASE_URL}/connections`, makeRequest('POST', body));
       if (resp.status === 409) {
-        resp = await fetch(`${BASE_URL}/connections/${vals.name}`, makeRequest('PUT', body));
+        resp = await hugrFetch(`${BASE_URL}/connections/${vals.name}`, makeRequest('PUT', body));
       }
       return resp.ok;
     };
@@ -356,7 +362,7 @@ export class ConnectionManagerWidget extends Widget {
     const doBrowserLogin = (name: string): Promise<boolean> => {
       return new Promise(async (resolve) => {
         try {
-          const resp = await fetch(`${BASE_URL}/connections/${name}/login`, makeRequest('POST'));
+          const resp = await hugrFetch(`${BASE_URL}/connections/${name}/login`, makeRequest('POST'));
           const data = await resp.json();
           if (!resp.ok) {
             showMsg(`<span class="hugr-cm-err">${escapeHtml(data.error || 'Login failed')}</span>`);
@@ -372,7 +378,7 @@ export class ConnectionManagerWidget extends Widget {
             attempts++;
             setTimeout(async () => {
               try {
-                const r = await fetch(`${BASE_URL}/connections/${name}/auth`);
+                const r = await hugrFetch(`${BASE_URL}/connections/${name}/auth`);
                 const d = await r.json();
                 if (d.authenticated) { resolve(true); return; }
               } catch { /* ignore */ }
@@ -396,7 +402,7 @@ export class ConnectionManagerWidget extends Widget {
       if (vals.auth_type === 'browser') {
         // Browser: server-side test — POST /hugr/test starts OIDC login, callback runs test query
         try {
-          const resp = await fetch(`${BASE_URL}/test`, makeRequest('POST', { url: vals.url, auth_type: 'browser' }));
+          const resp = await hugrFetch(`${BASE_URL}/test`, makeRequest('POST', { url: vals.url, auth_type: 'browser' }));
           const data = await resp.json();
           if (!resp.ok) {
             showMsg(`<span class="hugr-cm-err">${escapeHtml(data.error || 'Test failed')}</span>`);
@@ -416,7 +422,7 @@ export class ConnectionManagerWidget extends Widget {
             attempts++;
             setTimeout(async () => {
               try {
-                const r = await fetch(`${BASE_URL}/test/${encodeURIComponent(testId)}`);
+                const r = await hugrFetch(`${BASE_URL}/test/${encodeURIComponent(testId)}`);
                 const result = await r.json();
                 if (result.status === 'pending' || (result.ok === undefined && !result.error)) {
                   poll();
@@ -536,7 +542,7 @@ export class ConnectionManagerWidget extends Widget {
 
   private async _setDefault(name: string): Promise<void> {
     try {
-      await fetch(`${BASE_URL}/connections/${name}/default`, makeRequest('PUT'));
+      await hugrFetch(`${BASE_URL}/connections/${name}/default`, makeRequest('PUT'));
       await this._loadConnections();
     } catch (e) {
       console.error('Failed to set default connection', e);
@@ -547,7 +553,7 @@ export class ConnectionManagerWidget extends Widget {
     const confirmed = await this._showConfirm(`Delete "${escapeHtml(name)}"?`, 'This connection will be removed. Running kernels will keep using it until restarted.');
     if (!confirmed) return;
     try {
-      await fetch(`${BASE_URL}/connections/${name}`, makeRequest('DELETE'));
+      await hugrFetch(`${BASE_URL}/connections/${name}`, makeRequest('DELETE'));
       await this._loadConnections();
     } catch (e) {
       console.error('Failed to delete connection', e);
@@ -558,7 +564,7 @@ export class ConnectionManagerWidget extends Widget {
   private async _loginConnection(name: string): Promise<void> {
     this._showResult('<span class="hugr-cm-info">Starting login...</span>');
     try {
-      const resp = await fetch(`${BASE_URL}/connections/${name}/login`, makeRequest('POST'));
+      const resp = await hugrFetch(`${BASE_URL}/connections/${name}/login`, makeRequest('POST'));
       const data = await resp.json();
       if (!resp.ok) {
         this._showResult(`<span class="hugr-cm-err">${escapeHtml(data.error || 'Login failed')}</span>`);
@@ -584,7 +590,7 @@ export class ConnectionManagerWidget extends Widget {
     }
     setTimeout(async () => {
       try {
-        const resp = await fetch(`${BASE_URL}/connections/${name}/auth`);
+        const resp = await hugrFetch(`${BASE_URL}/connections/${name}/auth`);
         const data = await resp.json();
         if (data.authenticated) {
           this._showResult('<span class="hugr-cm-ok">Logged in</span>');
@@ -599,7 +605,7 @@ export class ConnectionManagerWidget extends Widget {
 
   private async _logoutConnection(name: string): Promise<void> {
     try {
-      const resp = await fetch(`${BASE_URL}/connections/${name}/logout`, makeRequest('POST'));
+      const resp = await hugrFetch(`${BASE_URL}/connections/${name}/logout`, makeRequest('POST'));
       const data = await resp.json();
       if (data.end_session_url) {
         // Open IdP logout in new tab — redirects back to /hugr/oauth/logout which auto-closes
