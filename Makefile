@@ -1,9 +1,10 @@
 KERNEL_DIR := $(HOME)/Library/Jupyter/kernels/hugr
 DUCKDB_KERNEL_DIR := $(CURDIR)/../duckdb-kernel
 EXT_DIR := $(CURDIR)/extensions/jupyterlab
+VSCODE_DIR := $(CURDIR)/extensions/vscode
 VENV_LABEXT := $(CURDIR)/.venv/share/jupyter/labextensions
 
-.PHONY: build install clean test copy-perspective build-ext install-ext build-kernel
+.PHONY: build install clean test copy-perspective build-ext install-ext build-kernel build-vscode build-extensions
 
 build: build-kernel build-ext
 
@@ -12,6 +13,11 @@ build-kernel:
 
 build-ext:
 	cd $(EXT_DIR) && uv run jlpm install && uv run jlpm build
+
+build-vscode:
+	cd $(VSCODE_DIR) && npm install && npm run build
+
+build-extensions: build-ext build-vscode
 
 install: install-ext copy-perspective
 	mkdir -p $(KERNEL_DIR)
@@ -41,3 +47,4 @@ test:
 
 clean:
 	cd $(EXT_DIR) && rm -rf lib hugr_graphql_ide/labextension node_modules
+	cd $(VSCODE_DIR) && rm -rf out node_modules

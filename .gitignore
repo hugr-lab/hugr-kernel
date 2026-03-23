@@ -25,7 +25,8 @@ go.work.sum
 /extensions/jupyterlab/yarn.lock
 /extensions/jupyterlab/lib/
 /extensions/jupyterlab/labextension/
-/extensions/jupyterlab/hugr_graphql_ide/
+/extensions/jupyterlab/hugr_graphql_ide/labextension/
+/extensions/jupyterlab/hugr_graphql_ide/__pycache__/
 
 /extensions/vscode/node_modules
 /extensions/vscode/out/

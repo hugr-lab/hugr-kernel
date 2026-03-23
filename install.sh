@@ -87,6 +87,19 @@ for LOGO in logo-32x32.png logo-64x64.png; do
     fi
 done
 
+# Download and extract Perspective viewer static files
+STATIC_URL="https://github.com/${REPO}/releases/download/${VERSION}/perspective-static.tar.gz"
+echo "Downloading Perspective viewer assets..."
+if curl -fSL -o "${KERNEL_DIR}/perspective-static.tar.gz" "$STATIC_URL" 2>/dev/null; then
+    mkdir -p "${KERNEL_DIR}/static"
+    tar -xzf "${KERNEL_DIR}/perspective-static.tar.gz" -C "${KERNEL_DIR}/static"
+    rm -f "${KERNEL_DIR}/perspective-static.tar.gz"
+    echo "Perspective viewer assets installed"
+else
+    echo "Warning: Could not download Perspective viewer assets (non-fatal)"
+    echo "  Result rendering may fall back to plain text"
+fi
+
 echo ""
 echo "hugr-kernel ${VERSION} installed to ${KERNEL_DIR}"
 echo "Verify with: jupyter kernelspec list"

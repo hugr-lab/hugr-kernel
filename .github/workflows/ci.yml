@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -23,3 +26,50 @@ jobs:
 
       - name: Test
         run: go test ./...
+
+  build-jupyterlab:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install JupyterLab build tools
+        run: pip install jupyterlab>=4.0.0
+
+      - name: Build labextension
+        working-directory: extensions/jupyterlab
+        run: |
+          jlpm install
+          jlpm build:prod
+
+      - name: Verify labextension output
+        run: |
+          test -d extensions/jupyterlab/hugr_graphql_ide/labextension/static
+          echo "labextension build OK"
+
+  build-vscode:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Build VS Code extension
+        working-directory: extensions/vscode
+        run: |
+          npm install
+          npm run build
+
+      - name: Verify extension output
+        run: |
+          test -f extensions/vscode/out/extension.js
+          echo "VS Code extension build OK"

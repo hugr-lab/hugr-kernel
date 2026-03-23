@@ -74,6 +74,8 @@ internal/renderer/table.go       # ASCII table fallback
 - TypeScript 5.8, bundled with esbuild (existing pipeline) + `@types/vscode` ^1.80.0 (existing), no new npm dependencies — use native VS Code APIs (TreeView, WebviewPanel, ThemeIcon) (007-vscode-hugr-explorer)
 - Go 1.26.1 (kernel), Python 3.11 (connection service), TypeScript 5.x (JupyterLab extension) tornado (existing), `hugr.client` (existing), `@jupyterlab/application` (existing), `authlib` (new — OIDC/PKCE for Python) (008-oidc-browser-login)
 - `~/.hugr/connections.json` (existing file, extended with `tokens` field) (008-oidc-browser-login)
+- Go 1.26.1 (kernel), TypeScript 5.8 (extensions), Python 3.11 (server extension) + GitHub Actions, hatchling + hatch-jupyter-builder (PyPI), @vscode/vsce (Marketplace) (009-publish-distribution)
+- N/A (CI/CD pipeline, no data storage) (009-publish-distribution)
 
 ## Recent Changes
 - 006-hugr-explorer: Added TypeScript 5.x (JupyterLab extension), Python 3.11 (server extension), Go 1.26.1 (kernel — minimal changes) + `@jupyterlab/application`, `@lumino/widgets`, webpack 5, tornado (server proxy)
