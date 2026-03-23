@@ -4,6 +4,7 @@
  * authentication headers.
  */
 import { tableFromIPC } from 'apache-arrow';
+import { PageConfig } from '@jupyterlab/coreutils';
 
 export interface HugrClientOptions {
   /** Proxy URL: /hugr/proxy/{connectionName} */
@@ -259,7 +260,7 @@ export class HugrClient {
 
     try {
       const resp = await fetch(
-        `/hugr/connections/${encodeURIComponent(this._connectionName)}/token`,
+        `${PageConfig.getBaseUrl()}hugr/connections/${encodeURIComponent(this._connectionName)}/token`,
         { headers }
       );
       if (!resp.ok) {

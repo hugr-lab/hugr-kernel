@@ -3,10 +3,11 @@
  */
 import { Widget } from '@lumino/widgets';
 import { LabIcon } from '@jupyterlab/ui-components';
+import { PageConfig } from '@jupyterlab/coreutils';
 import { escapeHtml } from './utils';
 import { HugrClient } from './hugrClient';
 
-const BASE_URL = '/hugr';
+const BASE_URL = PageConfig.getBaseUrl() + 'hugr';
 
 export const hugrIcon = new LabIcon({
   name: '@hugr-lab/jupyterlab-graphql-ide:hugr-icon',
