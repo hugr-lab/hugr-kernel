@@ -116,14 +116,22 @@ const explorerPlugin: JupyterFrontEndPlugin<void> = {
       }
     }) as EventListener);
 
-    const loadConnections = async () => {
+    const loadConnections = async (retries = 3) => {
       try {
         const baseUrl = app.serviceManager.serverSettings.baseUrl;
         const resp = await fetch(baseUrl + 'hugr/connections', { credentials: 'same-origin' });
+        if (resp.status === 403 && retries > 0) {
+          setTimeout(() => loadConnections(retries - 1), 2000);
+          return;
+        }
         const connections = await resp.json();
         const defaultConn = connections.find((c: any) => c.status === 'default');
         explorer.setConnections(connections, defaultConn?.name || null);
       } catch (e) {
+        if (retries > 0) {
+          setTimeout(() => loadConnections(retries - 1), 2000);
+          return;
+        }
         console.error('Failed to load connections for explorer', e);
       }
     };

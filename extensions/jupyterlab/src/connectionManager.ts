@@ -100,13 +100,22 @@ export class ConnectionManagerWidget extends Widget {
     this._loadConnections();
   }
 
-  private async _loadConnections(): Promise<void> {
+  private async _loadConnections(retries = 3): Promise<void> {
     try {
       const resp = await hugrFetch(`${BASE_URL}/connections`);
+      if (resp.status === 403 && retries > 0) {
+        // JupyterHub OAuth may not be ready yet — retry after delay
+        setTimeout(() => this._loadConnections(retries - 1), 2000);
+        return;
+      }
       this._connections = await resp.json();
       this._renderList();
       this._startAuthMonitor();
     } catch (e) {
+      if (retries > 0) {
+        setTimeout(() => this._loadConnections(retries - 1), 2000);
+        return;
+      }
       console.error('Failed to load connections', e);
     }
   }
