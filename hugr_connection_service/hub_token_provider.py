@@ -1,0 +1,206 @@
+"""Hub Token Provider — refreshes access_token by polling JupyterHub API.
+
+No refresh_token is stored in the container. JupyterHub manages the OIDC
+refresh cycle; this provider fetches the latest access_token from the Hub API.
+Refresh scheduling is based on the JWT `exp` claim (30 seconds before expiry).
+"""
+
+import base64
+import json
+import logging
+import os
+import tempfile
+import time
+from pathlib import Path
+
+import httpx
+from tornado.ioloop import IOLoop
+
+log = logging.getLogger("hugr_connection_service.hub_token_provider")
+
+
+def _config_path() -> Path:
+    env = os.environ.get("HUGR_CONFIG_PATH")
+    if env:
+        return Path(env)
+    return Path.home() / ".hugr" / "connections.json"
+
+
+def _load_config() -> dict:
+    p = _config_path()
+    if not p.exists():
+        return {"connections": [], "default": ""}
+    return json.loads(p.read_text())
+
+
+def _save_config(cfg: dict) -> None:
+    """Write config atomically (write to temp file, then rename)."""
+    p = _config_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "w") as f:
+            json.dump(cfg, f, indent=2)
+            f.write("\n")
+        os.replace(tmp_path, p)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _decode_jwt_exp(token: str) -> float | None:
+    """Decode exp claim from JWT payload without signature verification."""
+    try:
+        parts = token.split(".")
+        if len(parts) < 2:
+            return None
+        payload = parts[1]
+        # Add padding
+        padding = 4 - len(payload) % 4
+        if padding != 4:
+            payload += "=" * padding
+        data = json.loads(base64.urlsafe_b64decode(payload))
+        exp = data.get("exp")
+        return float(exp) if exp is not None else None
+    except Exception:
+        return None
+
+
+class HubTokenProvider:
+    """Refreshes access_token by polling JupyterHub API.
+
+    Token refresh scheduling is based on the JWT exp claim:
+    - Schedule next refresh at exp - 30 seconds
+    - Minimum delay: 5 seconds
+    - On failure: exponential backoff (5s, 10s, 20s, 40s, max 60s)
+    - On same token (Hub hasn't refreshed yet): retry in 10s
+    """
+
+    def __init__(
+        self,
+        connection_name: str,
+        initial_access_token: str | None = None,
+    ):
+        self.connection_name = connection_name
+        self.hub_api_url = os.environ.get("JUPYTERHUB_API_URL", "")
+        self.hub_token = os.environ.get("JUPYTERHUB_API_TOKEN", "")
+        self._refresh_handle = None
+        self._backoff_delay = 5
+        self._last_token = None
+
+        if initial_access_token:
+            self._write_token(initial_access_token)
+            self._last_token = initial_access_token
+
+    def start(self):
+        """Begin the token refresh polling loop."""
+        if not self.hub_api_url or not self.hub_token:
+            log.info(
+                "No JUPYTERHUB_API_URL/TOKEN — hub token provider disabled "
+                "(standalone mode, no JupyterHub)"
+            )
+            return
+
+        # Schedule first refresh based on initial token expiry
+        delay = self._delay_from_current_token()
+        log.info(
+            "Hub token provider started for %r, first refresh in %.0fs",
+            self.connection_name,
+            delay,
+        )
+        self._schedule(delay)
+
+    def stop(self):
+        """Cancel any pending refresh."""
+        if self._refresh_handle is not None:
+            IOLoop.current().remove_timeout(self._refresh_handle)
+            self._refresh_handle = None
+
+    def _delay_from_current_token(self) -> float:
+        """Calculate delay until next refresh from current token's exp."""
+        cfg = _load_config()
+        for conn in cfg.get("connections", []):
+            if conn.get("name") == self.connection_name:
+                token = conn.get("tokens", {}).get("access_token")
+                if token:
+                    exp = _decode_jwt_exp(token)
+                    if exp:
+                        delay = exp - time.time() - 30
+                        return max(delay, 5)
+        # No token yet — poll soon
+        return 10
+
+    def _schedule(self, delay: float):
+        """Schedule the next refresh call."""
+        self.stop()
+        self._refresh_handle = IOLoop.current().call_later(
+            delay, self._do_refresh
+        )
+
+    async def _do_refresh(self):
+        """Fetch fresh access_token from JupyterHub API."""
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"{self.hub_api_url}/user",
+                    headers={"Authorization": f"Bearer {self.hub_token}"},
+                    timeout=10,
+                )
+                resp.raise_for_status()
+
+            auth_state = resp.json().get("auth_state", {})
+            access_token = auth_state.get("access_token")
+
+            if not access_token:
+                log.warning("Hub API returned no access_token in auth_state")
+                self._schedule(10)
+                return
+
+            # Same token — Hub hasn't refreshed yet, retry in 10s
+            if access_token == self._last_token:
+                self._schedule(10)
+                return
+
+            # New token — write and reschedule
+            self._write_token(access_token)
+            self._last_token = access_token
+            self._backoff_delay = 5  # reset backoff
+
+            exp = _decode_jwt_exp(access_token)
+            if exp:
+                delay = max(exp - time.time() - 30, 5)
+            else:
+                delay = 240  # fallback: 4 minutes
+            log.info(
+                "Token refreshed for %r, next refresh in %.0fs",
+                self.connection_name,
+                delay,
+            )
+            self._schedule(delay)
+
+        except Exception as e:
+            log.warning(
+                "Token refresh failed for %r: %s. Retrying in %ds",
+                self.connection_name,
+                e,
+                self._backoff_delay,
+            )
+            self._schedule(self._backoff_delay)
+            self._backoff_delay = min(self._backoff_delay * 2, 60)
+
+    def _write_token(self, access_token: str):
+        """Write access_token + expires_at to the managed connection in connections.json."""
+        exp = _decode_jwt_exp(access_token)
+
+        cfg = _load_config()
+        for conn in cfg.get("connections", []):
+            if conn.get("name") == self.connection_name and conn.get("managed"):
+                conn["tokens"] = {
+                    "access_token": access_token,
+                    "expires_at": int(exp) if exp else 0,
+                }
+                break
+        _save_config(cfg)

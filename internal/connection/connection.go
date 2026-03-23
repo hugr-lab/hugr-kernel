@@ -21,11 +21,12 @@ const DefaultTimeout = 5 * time.Minute
 type AuthMode string
 
 const (
-	AuthPublic  AuthMode = "public"
-	AuthAPIKey  AuthMode = "apikey"
-	AuthBearer  AuthMode = "bearer"
-	AuthBrowser AuthMode = "browser"
-	AuthOIDC    AuthMode = "oidc"
+	AuthPublic     AuthMode = "public"
+	AuthAPIKey     AuthMode = "apikey"
+	AuthBearer     AuthMode = "bearer"
+	AuthBrowser    AuthMode = "browser"
+	AuthOIDC       AuthMode = "oidc"
+	AuthHub AuthMode = "hub"
 )
 
 // Connection represents a named Hugr endpoint with its configuration.
@@ -33,6 +34,7 @@ type Connection struct {
 	Name     string
 	URL      string
 	AuthMode AuthMode
+	Managed  bool // Hub-managed connection, read-only for users
 	Timeout  time.Duration
 
 	// Browser auth token fields (in-memory cache, loaded from connections.json)
@@ -63,8 +65,8 @@ func (c *Connection) Query(ctx context.Context, query string, vars map[string]an
 	mode := c.AuthMode
 	c.mu.Unlock()
 
-	// For browser auth, check token expiry before executing
-	if mode == AuthBrowser {
+	// For browser/hub auth, check token expiry before executing
+	if mode == AuthBrowser || mode == AuthHub {
 		c.mu.Lock()
 		hasToken := c.accessToken != ""
 		needsRefresh := !hasToken || time.Until(c.expiresAt) < 5*time.Second

@@ -183,12 +183,13 @@ func loadConnectionsFromFile(cm *connection.Manager) {
 	var cfg struct {
 		Default     string `json:"default"`
 		Connections []struct {
-			Name     string `json:"name"`
-			URL      string `json:"url"`
-			AuthType string `json:"auth_type"`
-			APIKey   string `json:"api_key"`
-			Token    string `json:"token"`
-			Tokens   *struct {
+			Name      string `json:"name"`
+			URL       string `json:"url"`
+			AuthType  string `json:"auth_type"`
+			Managed   bool   `json:"managed"`
+			APIKey    string `json:"api_key"`
+			Token     string `json:"token"`
+			Tokens    *struct {
 				AccessToken string `json:"access_token"`
 				ExpiresAt   int64  `json:"expires_at"`
 			} `json:"tokens"`
@@ -208,15 +209,21 @@ func loadConnectionsFromFile(cm *connection.Manager) {
 				if conn == nil {
 					continue
 				}
+				conn.Managed = c.Managed
+
 				switch c.AuthType {
-				case "browser":
+				case "browser", "hub":
+					authMode := connection.AuthBrowser
+					if c.AuthType == "hub" {
+						authMode = connection.AuthHub
+					}
 					if c.Tokens != nil && c.Tokens.AccessToken != "" {
 						expiresAt := time.Unix(c.Tokens.ExpiresAt, 0)
 						conn.SetBrowserToken(c.Tokens.AccessToken, expiresAt, configPath)
-						log.Printf("Loaded browser auth for %q (expires %s)", c.Name, expiresAt.Format(time.RFC3339))
+						log.Printf("Loaded %s auth for %q (expires %s)", c.AuthType, c.Name, expiresAt.Format(time.RFC3339))
 					} else {
-						conn.SetAuthMode(connection.AuthBrowser)
-						log.Printf("Loaded browser connection %q (no token yet)", c.Name)
+						conn.SetAuthMode(authMode)
+						log.Printf("Loaded %s connection %q (no token yet)", c.AuthType, c.Name)
 					}
 				case "api_key":
 					if c.APIKey != "" {

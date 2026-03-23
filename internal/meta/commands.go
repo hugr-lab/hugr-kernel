@@ -98,16 +98,21 @@ func connectionsCommand(cm *connection.Manager) CommandFunc {
 			if c.Name == defaultName {
 				def = "*"
 			}
-			rows[i] = []string{c.Name, c.URL, string(c.AuthMode), def}
+			name := c.Name
+			if c.Managed {
+				name += " [managed]"
+			}
+			rows[i] = []string{name, c.URL, string(c.AuthMode), def}
 		}
 
 		// Build DTO for JSON output (avoid serializing internal client state)
 		connList := make([]map[string]any, len(conns))
 		for i, c := range conns {
 			connList[i] = map[string]any{
-				"name": c.Name,
-				"url":  c.URL,
-				"auth": string(c.AuthMode),
+				"name":    c.Name,
+				"url":     c.URL,
+				"auth":    string(c.AuthMode),
+				"managed": c.Managed,
 			}
 		}
 
@@ -137,6 +142,10 @@ func authCommand(cm *connection.Manager) CommandFunc {
 			return nil, fmt.Errorf("no connection configured")
 		}
 
+		if conn.Managed {
+			return nil, fmt.Errorf("cannot modify hub-managed connection %q", conn.Name)
+		}
+
 		switch connection.AuthMode(mode) {
 		case connection.AuthPublic:
 			conn.SetPublic()
@@ -163,6 +172,9 @@ func keyCommand(cm *connection.Manager) CommandFunc {
 		if conn == nil {
 			return nil, fmt.Errorf("no connection configured")
 		}
+		if conn.Managed {
+			return nil, fmt.Errorf("cannot modify hub-managed connection %q", conn.Name)
+		}
 		if conn.AuthMode != connection.AuthAPIKey {
 			return nil, fmt.Errorf("set auth mode first: :auth apikey")
 		}
@@ -185,6 +197,9 @@ func tokenCommand(cm *connection.Manager) CommandFunc {
 		conn := cm.GetDefault()
 		if conn == nil {
 			return nil, fmt.Errorf("no connection configured")
+		}
+		if conn.Managed {
+			return nil, fmt.Errorf("cannot modify hub-managed connection %q", conn.Name)
 		}
 		if conn.AuthMode != connection.AuthBearer {
 			return nil, fmt.Errorf("set auth mode first: :auth bearer")

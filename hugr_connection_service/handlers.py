@@ -95,6 +95,14 @@ class ProxyHandler(JupyterHandler):
                 headers["Authorization"] = f"Bearer {token_data['access_token']}"
             elif conn.get("tokens", {}).get("access_token"):
                 headers["Authorization"] = f"Bearer {conn['tokens']['access_token']}"
+        elif auth_type == "hub":
+            token = conn.get("tokens", {}).get("access_token")
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+            else:
+                self.set_status(401)
+                self.finish(json.dumps({"error": "Hub token not yet available, waiting for refresh..."}))
+                return
         if conn.get("role"):
             headers["X-Hugr-Role"] = conn["role"]
 
@@ -152,10 +160,17 @@ class ConnectionsHandler(APIHandler):
                 "url": c.get("url", ""),
                 "auth_type": c.get("auth_type", "public"),
                 "role": c.get("role"),
-                "read_only": False,
+                "managed": c.get("managed", False),
+                "read_only": c.get("managed", False),
                 "status": "default" if c.get("name") == default_name else "connected",
             }
-            if c.get("auth_type") == "browser":
+            if c.get("auth_type") == "hub":
+                token = c.get("tokens", {}).get("access_token")
+                entry["authenticated"] = bool(token)
+                expires_at = c.get("tokens", {}).get("expires_at")
+                if expires_at:
+                    entry["expires_at"] = expires_at
+            elif c.get("auth_type") == "browser":
                 auth_status = oidc.is_authenticated(c.get("name", ""))
                 entry["authenticated"] = auth_status["authenticated"]
                 if auth_status.get("expires_at"):
@@ -176,7 +191,12 @@ class ConnectionsHandler(APIHandler):
             return
 
         cfg = _load_config()
-        if _find_connection(cfg, name):
+        existing = _find_connection(cfg, name)
+        if existing:
+            if existing.get("managed"):
+                self.set_status(409)
+                self.finish(json.dumps({"error": f"Name '{name}' is reserved for hub-managed connection"}))
+                return
             self.set_status(409)
             self.finish(json.dumps({"error": f"connection '{name}' already exists"}))
             return
@@ -206,6 +226,11 @@ class ConnectionHandler(APIHandler):
             self.finish(json.dumps({"error": "not found"}))
             return
 
+        if conn.get("managed"):
+            self.set_status(403)
+            self.finish(json.dumps({"error": "Cannot modify hub-managed connection"}))
+            return
+
         body = json.loads(self.request.body)
         conn["url"] = body.get("url", conn["url"])
         conn["auth_type"] = body.get("auth_type", conn.get("auth_type", "public"))
@@ -217,6 +242,12 @@ class ConnectionHandler(APIHandler):
     @tornado.web.authenticated
     def delete(self, name: str):
         cfg = _load_config()
+        conn = _find_connection(cfg, name)
+        if conn and conn.get("managed"):
+            self.set_status(403)
+            self.finish(json.dumps({"error": "Cannot delete hub-managed connection"}))
+            return
+
         connections = cfg.get("connections", [])
         cfg["connections"] = [c for c in connections if c.get("name") != name]
         if cfg.get("default") == name:
