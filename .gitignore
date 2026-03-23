@@ -22,10 +22,11 @@ go.work.sum
 /extensions/jupyterlab/.yarn
 /extensions/jupyterlab/.yarnrc.yml
 /extensions/jupyterlab/node_modules
-/extensions/jupyterlab/yarn.lock
+# Keep yarn.lock tracked for CI reproducibility
 /extensions/jupyterlab/lib/
 /extensions/jupyterlab/labextension/
-/extensions/jupyterlab/hugr_graphql_ide/
+/extensions/jupyterlab/hugr_graphql_ide/labextension/
+/extensions/jupyterlab/hugr_graphql_ide/__pycache__/
 
 /extensions/vscode/node_modules
 /extensions/vscode/out/

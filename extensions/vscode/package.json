@@ -5,10 +5,28 @@
   "description": "GraphQL IDE for Hugr — connections, schema explorer, type search, and diagnostics in VS Code notebooks",
   "publisher": "hugr-lab",
   "license": "MIT",
+  "icon": "resources/hugr-icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/hugr-lab/hugr-kernel",
     "directory": "extensions/vscode"
+  },
+  "homepage": "https://hugr-lab.github.io/",
+  "bugs": {
+    "url": "https://github.com/hugr-lab/hugr-kernel/issues"
+  },
+  "keywords": [
+    "hugr",
+    "graphql",
+    "jupyter",
+    "notebook",
+    "ide",
+    "schema",
+    "query"
+  ],
+  "galleryBanner": {
+    "color": "#1e1e2e",
+    "theme": "dark"
   },
   "engines": {
     "vscode": "^1.80.0"

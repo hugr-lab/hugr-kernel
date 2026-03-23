@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling>=1.5.0", "jupyterlab>=4.0.0,<5", "hatch-nodejs-version>=0.3.2", "hatch-jupyter-builder>=0.5"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hugr-graphql-ide"
+version = "0.1.0"
+description = "JupyterLab extension for Hugr GraphQL IDE — connections, schema explorer, completions, hover, and OIDC authentication"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+dependencies = [
+    "jupyter_server>=2.0.0",
+    "authlib>=1.3",
+    "httpx>=0.27",
+]
+
+[project.entry-points."jupyter_server.serverextension"]
+hugr_connection_service = "hugr_connection_service"
+
+[tool.hatch.build]
+artifacts = ["hugr_graphql_ide/labextension"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["hugr_graphql_ide", "hugr_connection_service"]
+ignore-vcs = true
+
+[tool.hatch.build.targets.wheel.shared-data]
+"hugr_graphql_ide/labextension" = "share/jupyter/labextensions/@hugr-lab/jupyterlab-graphql-ide"
+
+[tool.hatch.build.hooks.jupyter-builder]
+dependencies = ["hatch-jupyter-builder>=0.5"]
+build-function = "hatch_jupyter_builder.npm_builder"
+ensured-targets = [
+    "hugr_graphql_ide/labextension/static/style.js",
+    "hugr_graphql_ide/labextension/package.json",
+]
+skip-if-exists = ["hugr_graphql_ide/labextension/static/style.js"]
+
+[tool.hatch.build.hooks.jupyter-builder.build-kwargs]
+build_cmd = "build:prod"
+npm = ["jlpm"]

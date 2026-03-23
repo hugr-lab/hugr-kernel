@@ -8,6 +8,9 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     strategy:
@@ -55,8 +58,126 @@ jobs:
           name: hugr-kernel-${{ matrix.goos }}-${{ matrix.goarch }}
           path: hugr-kernel-*
 
+  build-jupyterlab:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install JupyterLab build tools
+        run: pip install jupyterlab>=4.0.0 build
+
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i "s/^version = .*/version = \"$VERSION\"/" extensions/jupyterlab/pyproject.toml
+          cd extensions/jupyterlab && npm pkg set version="$VERSION"
+
+      - name: Build labextension
+        working-directory: extensions/jupyterlab
+        run: |
+          jlpm install
+          jlpm build:prod
+
+      - name: Copy connection service into build directory
+        run: cp -r hugr_connection_service extensions/jupyterlab/
+
+      - name: Build Python wheel
+        working-directory: extensions/jupyterlab
+        run: python -m build
+
+      - name: Create perspective-static tarball
+        run: |
+          if [ -d "static/perspective" ]; then
+            tar -czf perspective-static.tar.gz -C static perspective
+          else
+            echo "Warning: static/perspective not found, creating empty tarball"
+            mkdir -p /tmp/perspective
+            tar -czf perspective-static.tar.gz -C /tmp perspective
+          fi
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: jupyterlab-wheel
+          path: extensions/jupyterlab/dist/*.whl
+
+      - name: Upload perspective static files
+        uses: actions/upload-artifact@v4
+        with:
+          name: perspective-static
+          path: perspective-static.tar.gz
+
+  build-vscode:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd extensions/vscode
+          npm pkg set version="$VERSION"
+
+      - name: Build VS Code extension
+        working-directory: extensions/vscode
+        run: |
+          npm install
+          npm run build
+
+      - name: Package VSIX
+        working-directory: extensions/vscode
+        run: npx @vscode/vsce package --no-dependencies -o hugr-graphql-ide.vsix
+
+      - name: Upload VSIX
+        uses: actions/upload-artifact@v4
+        with:
+          name: vscode-vsix
+          path: extensions/vscode/hugr-graphql-ide.vsix
+
+  publish-pypi:
+    needs: build-jupyterlab
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: jupyterlab-wheel
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
+
+  publish-vscode:
+    needs: build-vscode
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: vscode-vsix
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Publish to VS Code Marketplace
+        run: npx @vscode/vsce publish --packagePath hugr-graphql-ide.vsix || echo "Publish skipped (version may already exist)"
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
   release:
-    needs: [build]
+    needs: [build, build-jupyterlab, build-vscode]
     runs-on: ubuntu-latest
 
     steps:
@@ -76,6 +197,9 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/hugr-kernel-*
+            artifacts/hugr-graphql-ide.vsix
+            artifacts/perspective-static.tar.gz
+            artifacts/*.whl
             kernel/kernel.json
             kernel/logo-32x32.png
             kernel/logo-64x64.png
