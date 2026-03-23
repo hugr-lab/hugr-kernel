@@ -7,6 +7,7 @@ import {
   ILabShell,
 } from '@jupyterlab/application';
 import { INotebookTracker } from '@jupyterlab/notebook';
+import { ServerConnection } from '@jupyterlab/services';
 import { IEditorLanguageRegistry } from '@jupyterlab/codemirror';
 import { autocompletion } from '@codemirror/autocomplete';
 import { hoverTooltip } from '@codemirror/view';
@@ -116,22 +117,16 @@ const explorerPlugin: JupyterFrontEndPlugin<void> = {
       }
     }) as EventListener);
 
-    const loadConnections = async (retries = 3) => {
+    const loadConnections = async () => {
       try {
-        const baseUrl = app.serviceManager.serverSettings.baseUrl;
-        const resp = await fetch(baseUrl + 'hugr/connections', { credentials: 'same-origin' });
-        if (resp.status === 403 && retries > 0) {
-          setTimeout(() => loadConnections(retries - 1), 2000);
-          return;
-        }
+        const settings = app.serviceManager.serverSettings;
+        const resp = await ServerConnection.makeRequest(
+          settings.baseUrl + 'hugr/connections', {}, settings
+        );
         const connections = await resp.json();
         const defaultConn = connections.find((c: any) => c.status === 'default');
         explorer.setConnections(connections, defaultConn?.name || null);
       } catch (e) {
-        if (retries > 0) {
-          setTimeout(() => loadConnections(retries - 1), 2000);
-          return;
-        }
         console.error('Failed to load connections for explorer', e);
       }
     };
