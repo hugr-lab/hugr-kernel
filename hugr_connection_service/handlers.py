@@ -577,11 +577,28 @@ class DiscoverHandler(APIHandler):
 
 
 def setup_handlers(web_app):
+    from .spool_proxy import (
+        SpoolStreamHandler,
+        SpoolRawHandler,
+        SpoolPinHandler,
+        SpoolUnpinHandler,
+        SpoolIsPinnedHandler,
+        SpoolDeleteHandler,
+    )
+
     host_pattern = ".*$"
     base_url = web_app.settings["base_url"]
     route = lambda pattern: url_path_join(base_url, "hugr", pattern)
 
     web_app.add_handlers(host_pattern, [
+        # Spool proxy endpoints
+        (route("spool/arrow/stream"), SpoolStreamHandler),
+        (route("spool/arrow"), SpoolRawHandler),
+        (route("spool/pin"), SpoolPinHandler),
+        (route("spool/unpin"), SpoolUnpinHandler),
+        (route("spool/is_pinned"), SpoolIsPinnedHandler),
+        (route("spool/delete"), SpoolDeleteHandler),
+        # Connection management endpoints
         (route(r"proxy/([^/]+)"), ProxyHandler),
         (route("connections"), ConnectionsHandler),
         (route(r"connections/([^/]+)/default"), ConnectionDefaultHandler),
