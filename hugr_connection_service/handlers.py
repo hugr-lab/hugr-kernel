@@ -384,7 +384,7 @@ class ConnectionLoginHandler(APIHandler):
 
         # Build callback base URL from the current request
         base_url = self.settings.get("base_url", "/")
-            callback_base = f"{self.request.protocol}://{self.request.host}{base_url.rstrip('/')}"
+        callback_base = f"{self.request.protocol}://{self.request.host}{base_url.rstrip('/')}"
 
         try:
             auth_url = oidc.start_login(name, conn["url"], callback_base)
@@ -512,7 +512,8 @@ class ConnectionLogoutHandler(APIHandler):
             return
 
         from . import oidc
-        post_logout_redirect = f"{self.request.protocol}://{self.request.host}/hugr/oauth/logout"
+        base_url = self.settings.get("base_url", "/")
+        post_logout_redirect = f"{self.request.protocol}://{self.request.host}{base_url.rstrip('/')}/hugr/oauth/logout"
         result = oidc.logout(name, post_logout_redirect=post_logout_redirect)
         resp = {"status": "logged_out"}
         if result and result.get("end_session_url"):
