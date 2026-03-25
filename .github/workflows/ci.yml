@@ -65,12 +65,21 @@ jobs:
 
       - name: Install and verify extensions
         run: |
-          pip install hugr-perspective-viewer>=0.2.2
+          pip install "hugr-perspective-viewer>=0.2.2"
           pip install extensions/jupyterlab/dist/*.whl
-          jupyter labextension list 2>&1 | grep -q "@hugr-lab/jupyterlab-graphql-ide"
-          jupyter labextension list 2>&1 | grep -q "@hugr-lab/perspective-viewer"
-          jupyter server extension list 2>&1 | grep -q "hugr_connection_service"
-          jupyter server extension list 2>&1 | grep -q "hugr_perspective"
+
+          echo "--- labextension list ---"
+          LAB_OUT=$(jupyter labextension list 2>&1) || true
+          echo "$LAB_OUT"
+          echo "$LAB_OUT" | grep "@hugr-lab/jupyterlab-graphql-ide"
+          echo "$LAB_OUT" | grep "@hugr-lab/perspective-viewer"
+
+          echo "--- server extension list ---"
+          SRV_OUT=$(jupyter server extension list 2>&1) || true
+          echo "$SRV_OUT"
+          echo "$SRV_OUT" | grep "hugr_connection_service"
+          echo "$SRV_OUT" | grep "hugr_perspective"
+
           echo "All extensions verified OK"
 
   build-vscode:
