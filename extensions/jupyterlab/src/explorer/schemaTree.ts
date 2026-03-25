@@ -477,6 +477,7 @@ export class SchemaTreeSection {
   }
 
   private _renderTree(): void {
+    this._cleanupTooltips();
     this._container.innerHTML = '';
 
     if (this._error) {
@@ -820,6 +821,8 @@ export class SchemaTreeSection {
         }
         tooltip = null;
         hideTimer = null;
+        const timerIdx = this._activeTimers.indexOf(timer);
+        if (timerIdx >= 0) this._activeTimers.splice(timerIdx, 1);
       }, 200);
       hideTimer = timer;
       this._activeTimers.push(timer);
