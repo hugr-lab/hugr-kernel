@@ -139,7 +139,7 @@ func (h *Handler) HandleResponse(resp *types.Response, queryID string, queryTime
 	}
 
 	// Walk extensions — single part for all extensions
-	if resp.Extensions != nil && len(resp.Extensions) > 0 {
+	if len(resp.Extensions) > 0 {
 		parts = append(parts, PartDef{
 			ID:    "extensions",
 			Type:  "json",
