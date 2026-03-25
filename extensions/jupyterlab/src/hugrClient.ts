@@ -11,6 +11,8 @@ export interface HugrClientOptions {
   url: string;
   authType: 'public' | 'api_key' | 'bearer' | 'browser' | 'hub';
   apiKey?: string;
+  /** Custom header name for API key (default: X-Api-Key) */
+  apiKeyHeader?: string;
   token?: string;
   role?: string;
   /** Connection name — required for browser auth to fetch tokens */
@@ -197,6 +199,7 @@ export class HugrClient {
   private _url: string;
   private _authType: 'public' | 'api_key' | 'bearer' | 'browser' | 'hub';
   private _apiKey?: string;
+  private _apiKeyHeader: string;
   private _token?: string;
   private _role?: string;
   private _timeout: number;
@@ -208,6 +211,7 @@ export class HugrClient {
     this._url = options.url;
     this._authType = options.authType;
     this._apiKey = options.apiKey;
+    this._apiKeyHeader = options.apiKeyHeader || 'X-Api-Key';
     this._token = options.token;
     this._role = options.role;
     this._connectionName = options.connectionName;
@@ -311,7 +315,7 @@ export class HugrClient {
           headers['Authorization'] = `Bearer ${browserToken}`;
         }
       } else if (this._authType === 'api_key' && this._apiKey) {
-        headers['X-Api-Key'] = this._apiKey;
+        headers[this._apiKeyHeader] = this._apiKey;
       } else if (this._authType === 'bearer' && this._token) {
         headers['Authorization'] = `Bearer ${this._token}`;
       }

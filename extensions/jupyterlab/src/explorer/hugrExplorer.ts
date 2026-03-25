@@ -74,6 +74,27 @@ export class HugrExplorerWidget extends Widget {
   }
 
   /**
+   * Update only the connections dropdown without re-rendering sections.
+   * Used when connections change (add/delete/login) to avoid aborting active queries.
+   */
+  updateConnectionsList(connections: any[]): void {
+    this._connections = connections;
+    const select = this.node.querySelector('.hugr-explorer-conn-select') as HTMLSelectElement | null;
+    if (!select) return;
+
+    const current = select.value;
+    select.innerHTML = '';
+    for (const conn of connections) {
+      const name = typeof conn === 'string' ? conn : conn.name ?? String(conn);
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      if (name === current) option.selected = true;
+      select.appendChild(option);
+    }
+  }
+
+  /**
    * Switch to the Types tab and trigger a search query.
    * Enables cross-reference navigation from schema tree and detail modals.
    */
@@ -230,6 +251,7 @@ export class HugrExplorerWidget extends Widget {
       url,
       authType,
       apiKey: conn?.api_key,
+      apiKeyHeader: conn?.api_key_header,
       token: conn?.token,
       role: conn?.role,
       connectionName: (authType === 'browser' || authType === 'hub') ? name : undefined,

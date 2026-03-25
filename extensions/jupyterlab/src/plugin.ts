@@ -132,11 +132,10 @@ const explorerPlugin: JupyterFrontEndPlugin<void> = {
     };
     loadConnections();
 
-    // Refresh explorer when connections change (add/delete/login/logout)
+    // Refresh explorer dropdown when connections change (add/delete/login/logout)
     document.addEventListener('hugr:connections-changed', ((e: CustomEvent) => {
       const connections = e.detail?.connections || [];
-      const defaultConn = connections.find((c: any) => c.status === 'default');
-      explorer.setConnections(connections, defaultConn?.name || null);
+      explorer.updateConnectionsList(connections);
     }) as EventListener);
   },
 };

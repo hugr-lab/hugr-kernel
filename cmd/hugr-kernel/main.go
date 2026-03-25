@@ -187,8 +187,9 @@ func loadConnectionsFromFile(cm *connection.Manager) {
 			URL       string `json:"url"`
 			AuthType  string `json:"auth_type"`
 			Managed   bool   `json:"managed"`
-			APIKey    string `json:"api_key"`
-			Token     string `json:"token"`
+			APIKey       string `json:"api_key"`
+			APIKeyHeader string `json:"api_key_header"`
+			Token        string `json:"token"`
 			Tokens    *struct {
 				AccessToken string `json:"access_token"`
 				ExpiresAt   int64  `json:"expires_at"`
@@ -227,7 +228,11 @@ func loadConnectionsFromFile(cm *connection.Manager) {
 					}
 				case "api_key":
 					if c.APIKey != "" {
-						conn.SetAPIKey(c.APIKey)
+						if c.APIKeyHeader != "" {
+							conn.SetAPIKeyWithHeader(c.APIKey, c.APIKeyHeader)
+						} else {
+							conn.SetAPIKey(c.APIKey)
+						}
 					}
 				case "bearer":
 					if c.Token != "" {
