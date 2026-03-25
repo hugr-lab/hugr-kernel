@@ -87,6 +87,7 @@ class HubTokenProvider:
         self.connection_name = connection_name
         self.hub_api_url = os.environ.get("JUPYTERHUB_API_URL", "")
         self.hub_token = os.environ.get("JUPYTERHUB_API_TOKEN", "")
+        self.hub_user = os.environ.get("JUPYTERHUB_USER", "")
         self._refresh_handle = None
         self._backoff_delay = 5
         self._last_token = None
@@ -145,13 +146,13 @@ class HubTokenProvider:
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
-                    f"{self.hub_api_url}/user",
+                    f"{self.hub_api_url}/users/{self.hub_user}",
                     headers={"Authorization": f"Bearer {self.hub_token}"},
                     timeout=10,
                 )
                 resp.raise_for_status()
 
-            auth_state = resp.json().get("auth_state", {})
+            auth_state = resp.json().get("auth_state") or {}
             access_token = auth_state.get("access_token")
 
             if not access_token:

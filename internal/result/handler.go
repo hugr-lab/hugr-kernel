@@ -25,6 +25,7 @@ type PartDef struct {
 	Type            string               `json:"type"`
 	Title           string               `json:"title"`
 	ArrowURL        string               `json:"arrow_url,omitempty"`
+	SpoolID         string               `json:"spool_id,omitempty"`
 	Rows            int64                `json:"rows,omitempty"`
 	Columns         []ColumnDef          `json:"columns,omitempty"`
 	DataSize        int64                `json:"data_size_bytes,omitempty"`
@@ -169,7 +170,7 @@ func (h *Handler) HandleResponse(resp *types.Response, queryID string, queryTime
 	// Populate backward-compatible flat fields from the first Arrow part
 	for _, p := range parts {
 		if p.Type == "arrow" && p.ArrowURL != "" {
-			metadata.QueryID = p.ID
+			metadata.QueryID = p.SpoolID
 			metadata.ArrowURL = p.ArrowURL
 			metadata.Rows = p.Rows
 			metadata.Columns = p.Columns
@@ -322,6 +323,7 @@ func (h *Handler) handleArrowPart(path, title, partID string, table types.ArrowT
 	}
 
 	if h.arrowServer != nil && h.spool != nil {
+		part.SpoolID = partID
 		part.ArrowURL = h.arrowServer.ArrowURL(partID, totalRows)
 		if info, err := os.Stat(h.spool.Path(partID)); err == nil {
 			part.DataSize = info.Size()

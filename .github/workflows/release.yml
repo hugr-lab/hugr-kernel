@@ -11,7 +11,7 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # duckdb-kernel release to pull perspective-static from
-  PERSPECTIVE_VERSION: "v0.2.3"
+  PERSPECTIVE_VERSION: "v0.3.0"
 
 jobs:
   build:
