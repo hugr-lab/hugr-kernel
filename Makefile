@@ -29,7 +29,7 @@ build-extensions: build-ext build-vscode
 install: build-kernel install-ext install-duckdb-extensions
 	mkdir -p $(KERNEL_DIR)
 	@sed 's|"hugr-kernel"|"$(KERNEL_DIR)/hugr-kernel"|' kernel/kernel.json > $(KERNEL_DIR)/kernel.json
-	@ln -sfn $(CURDIR)/.venv/bin/hugr-kernel $(KERNEL_DIR)/hugr-kernel
+	@cp -f $(CURDIR)/.venv/bin/hugr-kernel $(KERNEL_DIR)/hugr-kernel
 	@echo "Kernel installed to $(KERNEL_DIR)"
 
 # graphql-ide (hugr-kernel's own JupyterLab extension)
