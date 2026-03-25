@@ -61,12 +61,14 @@ export class HugrExplorerWidget extends Widget {
   }
 
   setConnections(connections: any[], defaultName: string | null): void {
+    const prevSelected = this._selectedConnection;
     this._connections = connections;
     if (defaultName !== null) {
       this._selectedConnection = defaultName;
     }
     this._render();
-    if (this._selectedConnection) {
+    // Only reload if connection changed or client not yet created
+    if (this._selectedConnection && (this._selectedConnection !== prevSelected || !this._client)) {
       this._onConnectionChange(this._selectedConnection);
     }
   }

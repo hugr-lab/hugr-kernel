@@ -502,7 +502,7 @@ export class ConnectionManagerWidget extends Widget {
   }
 
   private async _testConnectionByName(name: string): Promise<void> {
-    // Single modal — show "Testing..." then update with result
+    // Single modal — show "Testing..." then update with result via server-side test
     const overlay = document.createElement('div');
     overlay.className = 'hugr-dlg-overlay';
     overlay.innerHTML = `
@@ -525,16 +525,12 @@ export class ConnectionManagerWidget extends Widget {
 
     const bodyEl = overlay.querySelector('.hugr-dlg-body') as HTMLElement;
     try {
-      const client = new HugrClient({
-        url: `/hugr/proxy/${name}`,
-        authType: 'public',
-      });
-      const response = await client.query('{ function { core { info { version } } } }');
-      if (response.errors.length > 0) {
-        bodyEl.innerHTML = `<span class="hugr-cm-err">${escapeHtml(response.errors[0].message)}</span>`;
+      const resp = await hugrFetch(`${BASE_URL}/connections/${name}/test`, makeRequest('POST'));
+      const result = await resp.json();
+      if (result.ok) {
+        bodyEl.innerHTML = `<span class="hugr-cm-ok">v${escapeHtml(String(result.version || 'unknown'))}</span>`;
       } else {
-        const version = response.data?.function?.core?.info?.version ?? 'unknown';
-        bodyEl.innerHTML = `<span class="hugr-cm-ok">v${escapeHtml(String(version))}</span>`;
+        bodyEl.innerHTML = `<span class="hugr-cm-err">${escapeHtml(result.error || 'Test failed')}</span>`;
       }
     } catch {
       bodyEl.innerHTML = '<span class="hugr-cm-err">Connection failed</span>';
