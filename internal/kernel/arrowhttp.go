@@ -225,7 +225,8 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 			}
 		} else {
 			// Replace all geometry columns (native + WKB) with "{geometry}".
-			allGeo := geoIndices
+			allGeo := make([]int, len(geoIndices))
+			copy(allGeo, geoIndices)
 			for _, gc := range wkbCols {
 				allGeo = append(allGeo, gc.Index)
 			}
