@@ -110,6 +110,9 @@ if command -v pip &>/dev/null; then
     pip install "hugr-perspective-viewer>=0.2.2" 2>/dev/null && \
         echo "  Installed: hugr-perspective-viewer (spool proxy + result viewer)" || \
         echo "  Warning: Could not install hugr-perspective-viewer (non-fatal)"
+    pip install "hugr-graphql-ide>=0.2.0" 2>/dev/null && \
+        echo "  Installed: hugr-graphql-ide (GraphQL IDE, connection manager)" || \
+        echo "  Warning: Could not install hugr-graphql-ide (non-fatal)"
     echo ""
 fi
 
