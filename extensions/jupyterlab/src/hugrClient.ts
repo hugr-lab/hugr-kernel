@@ -341,6 +341,29 @@ export class HugrClient {
 
       const contentType = response.headers.get('Content-Type') || '';
 
+      // Handle HTTP errors before parsing body
+      if (!response.ok) {
+        if (response.status === 401) {
+          return {
+            data: {},
+            errors: [{ message: 'Authentication failed — token expired or missing. Re-login via the connection manager.' }],
+            extensions: {}
+          };
+        }
+        if (response.status === 403) {
+          return {
+            data: {},
+            errors: [{ message: 'Access denied — insufficient permissions.' }],
+            extensions: {}
+          };
+        }
+        return {
+          data: {},
+          errors: [{ message: `Server error: ${response.status} ${response.statusText}` }],
+          extensions: {}
+        };
+      }
+
       if (contentType.includes('multipart/mixed')) {
         return this._parseMultipartResponse(await response.arrayBuffer());
       }
