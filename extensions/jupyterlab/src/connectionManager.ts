@@ -63,6 +63,7 @@ interface ConnectionInfo {
 
 export class ConnectionManagerWidget extends Widget {
   private _connections: ConnectionInfo[] = [];
+  private _initialLoadDone = false;
   private _authMonitorTimer: ReturnType<typeof setInterval> | null = null;
   private _previousAuthState: Map<string, boolean> = new Map();
 
@@ -99,9 +100,12 @@ export class ConnectionManagerWidget extends Widget {
       this._connections = await resp.json();
       this._renderList();
       this._startAuthMonitor();
-      document.dispatchEvent(new CustomEvent('hugr:connections-changed', {
-        detail: { connections: this._connections },
-      }));
+      if (this._initialLoadDone) {
+        document.dispatchEvent(new CustomEvent('hugr:connections-changed', {
+          detail: { connections: this._connections },
+        }));
+      }
+      this._initialLoadDone = true;
     } catch (e) {
       console.error('Failed to load connections', e);
     }
@@ -275,6 +279,10 @@ export class ConnectionManagerWidget extends Widget {
             <label class="hugr-dlg-cred-label">Credential</label>
             <input type="password" data-field="credential" placeholder="" />
           </div>
+          <div class="hugr-cm-field hugr-dlg-header-name" style="display:none">
+            <label>Header Name</label>
+            <input type="text" data-field="api_key_header" placeholder="X-Api-Key" />
+          </div>
           <div class="hugr-dlg-result"></div>
         </div>
         <div class="hugr-dlg-footer">
@@ -300,10 +308,12 @@ export class ConnectionManagerWidget extends Widget {
     const roleWrap = overlay.querySelector('.hugr-dlg-role') as HTMLElement;
     const credLabel = overlay.querySelector('.hugr-dlg-cred-label') as HTMLElement;
     const credInput = overlay.querySelector('[data-field="credential"]') as HTMLInputElement;
+    const headerNameWrap = overlay.querySelector('.hugr-dlg-header-name') as HTMLElement;
     authSelect?.addEventListener('change', () => {
       const needsCred = authSelect.value === 'api_key' || authSelect.value === 'bearer';
       credWrap.style.display = needsCred ? '' : 'none';
       roleWrap.style.display = authSelect.value === 'public' || authSelect.value === 'browser' ? 'none' : '';
+      headerNameWrap.style.display = authSelect.value === 'api_key' ? '' : 'none';
       credLabel.textContent = authSelect.value === 'api_key' ? 'API Key' : 'Token';
       credInput.placeholder = authSelect.value === 'api_key' ? 'sk-...' : 'Bearer token';
     });
@@ -339,12 +349,16 @@ export class ConnectionManagerWidget extends Widget {
       auth_type: authSelect?.value || 'public',
       credential: credInput?.value || '',
       role: (overlay.querySelector('[data-field="role"]') as HTMLInputElement)?.value || '',
+      api_key_header: (overlay.querySelector('[data-field="api_key_header"]') as HTMLInputElement)?.value || '',
     });
 
     /** Save connection to server (create or update). */
     const saveConnection = async (vals: ReturnType<typeof getVals>): Promise<boolean> => {
       const body: any = { name: vals.name, url: vals.url, auth_type: vals.auth_type };
-      if (vals.auth_type === 'api_key') body.api_key = vals.credential;
+      if (vals.auth_type === 'api_key') {
+        body.api_key = vals.credential;
+        if (vals.api_key_header) body.api_key_header = vals.api_key_header;
+      }
       if (vals.auth_type === 'bearer') body.token = vals.credential;
       if (vals.role) body.role = vals.role;
       let resp = await hugrFetch(`${BASE_URL}/connections`, makeRequest('POST', body));
@@ -447,6 +461,7 @@ export class ConnectionManagerWidget extends Widget {
           url: vals.url,
           authType: vals.auth_type as 'public' | 'api_key' | 'bearer',
           apiKey: vals.auth_type === 'api_key' ? vals.credential : undefined,
+          apiKeyHeader: vals.auth_type === 'api_key' && vals.api_key_header ? vals.api_key_header : undefined,
           token: vals.auth_type === 'bearer' ? vals.credential : undefined,
           role: vals.role || undefined,
         });
@@ -502,7 +517,7 @@ export class ConnectionManagerWidget extends Widget {
   }
 
   private async _testConnectionByName(name: string): Promise<void> {
-    // Single modal — show "Testing..." then update with result
+    // Single modal — show "Testing..." then update with result via server-side test
     const overlay = document.createElement('div');
     overlay.className = 'hugr-dlg-overlay';
     overlay.innerHTML = `
@@ -525,16 +540,12 @@ export class ConnectionManagerWidget extends Widget {
 
     const bodyEl = overlay.querySelector('.hugr-dlg-body') as HTMLElement;
     try {
-      const client = new HugrClient({
-        url: `/hugr/proxy/${name}`,
-        authType: 'public',
-      });
-      const response = await client.query('{ function { core { info { version } } } }');
-      if (response.errors.length > 0) {
-        bodyEl.innerHTML = `<span class="hugr-cm-err">${escapeHtml(response.errors[0].message)}</span>`;
+      const resp = await hugrFetch(`${BASE_URL}/connections/${name}/test`, makeRequest('POST'));
+      const result = await resp.json();
+      if (result.ok) {
+        bodyEl.innerHTML = `<span class="hugr-cm-ok">v${escapeHtml(String(result.version || 'unknown'))}</span>`;
       } else {
-        const version = response.data?.function?.core?.info?.version ?? 'unknown';
-        bodyEl.innerHTML = `<span class="hugr-cm-ok">v${escapeHtml(String(version))}</span>`;
+        bodyEl.innerHTML = `<span class="hugr-cm-err">${escapeHtml(result.error || 'Test failed')}</span>`;
       }
     } catch {
       bodyEl.innerHTML = '<span class="hugr-cm-err">Connection failed</span>';

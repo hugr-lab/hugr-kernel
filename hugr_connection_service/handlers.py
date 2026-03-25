@@ -48,9 +48,16 @@ def _find_connection(cfg: dict, name: str):
 
 def _test_connection(url: str, auth_type: str = "public", **kwargs) -> dict:
     """Test connection using HugrClient which handles IPC multipart responses."""
+    import os
     from hugr.client import HugrClient
 
     try:
+        # TODO: remove env workaround when hugr-client supports api_key_header in constructor
+        api_key_header = kwargs.get("api_key_header")
+        old_header_env = os.environ.get("HUGR_API_KEY_HEADER")
+        if api_key_header:
+            os.environ["HUGR_API_KEY_HEADER"] = api_key_header
+
         client = HugrClient(
             url=url,
             api_key=kwargs.get("api_key") if auth_type == "api_key" else None,
@@ -58,6 +65,13 @@ def _test_connection(url: str, auth_type: str = "public", **kwargs) -> dict:
             role=kwargs.get("role"),
         )
         resp = client.query("{ function { core { info { version } } } }")
+        # Restore env
+        if api_key_header:
+            if old_header_env is not None:
+                os.environ["HUGR_API_KEY_HEADER"] = old_header_env
+            else:
+                os.environ.pop("HUGR_API_KEY_HEADER", None)
+
         # Extract version from the response
         for path, part in resp.parts.items():
             data = part.dict() if hasattr(part, "dict") else {}
@@ -65,6 +79,11 @@ def _test_connection(url: str, auth_type: str = "public", **kwargs) -> dict:
                 return {"ok": True, "version": data["version"]}
         return {"ok": True, "version": "unknown"}
     except Exception as e:
+        if api_key_header:
+            if old_header_env is not None:
+                os.environ["HUGR_API_KEY_HEADER"] = old_header_env
+            else:
+                os.environ.pop("HUGR_API_KEY_HEADER", None)
         return {"ok": False, "error": str(e)}
 
 
@@ -85,7 +104,8 @@ class ProxyHandler(JupyterHandler):
 
         headers = {"Content-Type": "application/json"}
         if auth_type == "api_key" and conn.get("api_key"):
-            headers["X-Api-Key"] = conn["api_key"]
+            header_name = conn.get("api_key_header", "X-Api-Key")
+            headers[header_name] = conn["api_key"]
         elif auth_type == "bearer" and conn.get("token"):
             headers["Authorization"] = f"Bearer {conn['token']}"
         elif auth_type == "browser":
@@ -164,6 +184,12 @@ class ConnectionsHandler(APIHandler):
                 "read_only": c.get("managed", False),
                 "status": "default" if c.get("name") == default_name else "connected",
             }
+            if c.get("api_key"):
+                entry["api_key"] = c["api_key"]
+            if c.get("api_key_header"):
+                entry["api_key_header"] = c["api_key_header"]
+            if c.get("token"):
+                entry["token"] = c["token"]
             if c.get("auth_type") == "hub":
                 token = c.get("tokens", {}).get("access_token")
                 entry["authenticated"] = bool(token)
@@ -202,6 +228,12 @@ class ConnectionsHandler(APIHandler):
             return
 
         entry = {"name": name, "url": url, "auth_type": body.get("auth_type", "public")}
+        if body.get("api_key"):
+            entry["api_key"] = body["api_key"]
+        if body.get("api_key_header"):
+            entry["api_key_header"] = body["api_key_header"]
+        if body.get("token"):
+            entry["token"] = body["token"]
         if body.get("role"):
             entry["role"] = body["role"]
         cfg.setdefault("connections", []).append(entry)
@@ -234,6 +266,12 @@ class ConnectionHandler(APIHandler):
         body = json.loads(self.request.body)
         conn["url"] = body.get("url", conn["url"])
         conn["auth_type"] = body.get("auth_type", conn.get("auth_type", "public"))
+        if "api_key" in body:
+            conn["api_key"] = body["api_key"]
+        if "api_key_header" in body:
+            conn["api_key_header"] = body["api_key_header"]
+        if "token" in body:
+            conn["token"] = body["token"]
         if body.get("role"):
             conn["role"] = body["role"]
         _save_config(cfg)
@@ -294,6 +332,7 @@ class ConnectionTestHandler(APIHandler):
             conn["url"],
             auth_type=auth_type,
             api_key=conn.get("api_key"),
+            api_key_header=conn.get("api_key_header"),
             token=token,
             role=conn.get("role"),
         )
