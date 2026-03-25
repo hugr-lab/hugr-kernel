@@ -54,7 +54,7 @@ def _test_connection(url: str, auth_type: str = "public", **kwargs) -> dict:
         client = HugrClient(
             url=url,
             api_key=kwargs.get("api_key") if auth_type == "api_key" else None,
-            token=kwargs.get("token") if auth_type == "bearer" else None,
+            token=kwargs.get("token") if auth_type in ("bearer", "hub") else None,
             role=kwargs.get("role"),
         )
         resp = client.query("{ function { core { info { version } } } }")
@@ -286,11 +286,15 @@ class ConnectionTestHandler(APIHandler):
             self.finish(json.dumps({"error": "not found"}))
             return
 
+        auth_type = conn.get("auth_type", "public")
+        token = conn.get("token")
+        if auth_type == "hub":
+            token = (conn.get("tokens") or {}).get("access_token")
         result = _test_connection(
             conn["url"],
-            auth_type=conn.get("auth_type", "public"),
+            auth_type=auth_type,
             api_key=conn.get("api_key"),
-            token=conn.get("token"),
+            token=token,
             role=conn.get("role"),
         )
         self.finish(json.dumps(result))
@@ -320,7 +324,8 @@ class TestHandler(APIHandler):
             _test_results[test_id] = {"status": "pending", "url": url}
 
             from . import oidc
-            callback_base = f"{self.request.protocol}://{self.request.host}"
+            base_url = self.settings.get("base_url", "/")
+            callback_base = f"{self.request.protocol}://{self.request.host}{base_url.rstrip('/')}"
             try:
                 auth_url = oidc.start_login(test_id, url, callback_base)
             except ValueError as e:
@@ -378,7 +383,8 @@ class ConnectionLoginHandler(APIHandler):
         from . import oidc
 
         # Build callback base URL from the current request
-        callback_base = f"{self.request.protocol}://{self.request.host}"
+        base_url = self.settings.get("base_url", "/")
+        callback_base = f"{self.request.protocol}://{self.request.host}{base_url.rstrip('/')}"
 
         try:
             auth_url = oidc.start_login(name, conn["url"], callback_base)
@@ -506,7 +512,8 @@ class ConnectionLogoutHandler(APIHandler):
             return
 
         from . import oidc
-        post_logout_redirect = f"{self.request.protocol}://{self.request.host}/hugr/oauth/logout"
+        base_url = self.settings.get("base_url", "/")
+        post_logout_redirect = f"{self.request.protocol}://{self.request.host}{base_url.rstrip('/')}/hugr/oauth/logout"
         result = oidc.logout(name, post_logout_redirect=post_logout_redirect)
         resp = {"status": "logged_out"}
         if result and result.get("end_session_url"):
