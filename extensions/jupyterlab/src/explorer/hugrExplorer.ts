@@ -230,7 +230,7 @@ export class HugrExplorerWidget extends Widget {
       apiKey: conn?.api_key,
       token: conn?.token,
       role: conn?.role,
-      connectionName: authType === 'browser' ? name : undefined,
+      connectionName: (authType === 'browser' || authType === 'hub') ? name : undefined,
     });
 
     this._selectedConnection = name;

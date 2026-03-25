@@ -526,6 +526,23 @@ class ConnectionTokenHandler(APIHandler):
             self.finish(json.dumps({"error": "not found"}))
             return
 
+        auth_type = conn.get("auth_type", "public")
+
+        # Hub auth: token from connections.json (refreshed by hub_token_provider)
+        if auth_type == "hub":
+            tokens = conn.get("tokens") or {}
+            token = tokens.get("access_token")
+            if token:
+                self.finish(json.dumps({
+                    "access_token": token,
+                    "expires_at": tokens.get("expires_at", 0),
+                }))
+            else:
+                self.set_status(404)
+                self.finish(json.dumps({"error": "hub token not yet available"}))
+            return
+
+        # Browser OIDC: token from in-memory session
         from . import oidc
         token_data = oidc.get_token(name)
         if not token_data:

@@ -9,7 +9,7 @@ import { PageConfig } from '@jupyterlab/coreutils';
 export interface HugrClientOptions {
   /** Proxy URL: /hugr/proxy/{connectionName} */
   url: string;
-  authType: 'public' | 'api_key' | 'bearer' | 'browser';
+  authType: 'public' | 'api_key' | 'bearer' | 'browser' | 'hub';
   apiKey?: string;
   token?: string;
   role?: string;
@@ -195,7 +195,7 @@ function setNested(
 
 export class HugrClient {
   private _url: string;
-  private _authType: 'public' | 'api_key' | 'bearer' | 'browser';
+  private _authType: 'public' | 'api_key' | 'bearer' | 'browser' | 'hub';
   private _apiKey?: string;
   private _token?: string;
   private _role?: string;
@@ -305,7 +305,7 @@ export class HugrClient {
       };
 
       // Auth headers
-      if (this._authType === 'browser') {
+      if (this._authType === 'browser' || this._authType === 'hub') {
         const browserToken = await this._fetchBrowserToken();
         if (browserToken) {
           headers['Authorization'] = `Bearer ${browserToken}`;
