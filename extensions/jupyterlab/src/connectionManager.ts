@@ -99,6 +99,9 @@ export class ConnectionManagerWidget extends Widget {
       this._connections = await resp.json();
       this._renderList();
       this._startAuthMonitor();
+      document.dispatchEvent(new CustomEvent('hugr:connections-changed', {
+        detail: { connections: this._connections },
+      }));
     } catch (e) {
       console.error('Failed to load connections', e);
     }
@@ -459,7 +462,7 @@ export class ConnectionManagerWidget extends Widget {
       }
     });
 
-    // Save button — closes on success
+    // Save button — closes immediately, login starts in background
     overlay.querySelector('.hugr-dlg-btn-save')?.addEventListener('click', async () => {
       const vals = getVals();
       if (!vals.name || !vals.url) { showMsg('<span class="hugr-cm-err">Name and URL are required</span>'); return; }
@@ -468,21 +471,26 @@ export class ConnectionManagerWidget extends Widget {
         const saved = await saveConnection(vals);
         if (!saved) { showMsg('<span class="hugr-cm-err">Save failed</span>'); return; }
 
-        // For browser connections: login after save
-        if (vals.auth_type === 'browser') {
-          const loggedIn = await doBrowserLogin(vals.name);
-          if (!loggedIn) {
-            showMsg('<span class="hugr-cm-err">Saved, but login failed</span>');
-            await this._loadConnections();
-            setTimeout(() => { showMsg(''); close(); }, 2000);
-            return;
-          }
-        }
-
+        // Always update list and close dialog first
         await this._loadConnections();
-        this._showResult('<span class="hugr-cm-ok">Saved. Restart running kernels to apply.</span>');
-        setTimeout(() => this._showResult(''), 4000);
         close();
+
+        // For browser connections: start login in background (don't block)
+        if (vals.auth_type === 'browser') {
+          this._showResult('<span class="hugr-cm-info">Saved. Starting login...</span>');
+          doBrowserLogin(vals.name).then(loggedIn => {
+            if (loggedIn) {
+              this._showResult('<span class="hugr-cm-ok">Logged in</span>');
+            } else {
+              this._showResult('<span class="hugr-cm-err">Login failed — click login to retry</span>');
+            }
+            void this._loadConnections();
+            setTimeout(() => this._showResult(''), 4000);
+          });
+        } else {
+          this._showResult('<span class="hugr-cm-ok">Saved. Restart running kernels to apply.</span>');
+          setTimeout(() => this._showResult(''), 4000);
+        }
       } catch {
         showMsg('<span class="hugr-cm-err">Save failed</span>');
       }
