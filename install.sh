@@ -105,12 +105,13 @@ echo "hugr-kernel ${VERSION} installed to ${KERNEL_DIR}"
 echo ""
 
 # Install JupyterLab extensions via pip (if available)
+VERSION_NUM="${VERSION#v}"
 if command -v pip &>/dev/null; then
     echo "Installing JupyterLab extensions..."
     pip install "hugr-perspective-viewer>=0.2.2" 2>/dev/null && \
         echo "  Installed: hugr-perspective-viewer (spool proxy + result viewer)" || \
         echo "  Warning: Could not install hugr-perspective-viewer (non-fatal)"
-    pip install "hugr-graphql-ide>=0.2.0" 2>/dev/null && \
+    pip install "hugr-graphql-ide>=${VERSION_NUM}" 2>/dev/null && \
         echo "  Installed: hugr-graphql-ide (GraphQL IDE, connection manager)" || \
         echo "  Warning: Could not install hugr-graphql-ide (non-fatal)"
     echo ""
