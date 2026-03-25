@@ -106,6 +106,15 @@ func (c *Connection) SetAPIKey(key string) {
 	c.recreateClient()
 }
 
+// SetAPIKeyWithHeader sets the API key auth mode with a custom header name.
+func (c *Connection) SetAPIKeyWithHeader(key, header string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.AuthMode = AuthAPIKey
+	c.options = []client.Option{client.WithApiKeyCustomHeader(key, header)}
+	c.recreateClient()
+}
+
 // SetBearerToken sets the bearer auth mode and recreates the client.
 func (c *Connection) SetBearerToken(token string) {
 	c.mu.Lock()
