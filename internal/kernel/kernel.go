@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"sync"
+	"time"
 
 	zmq "github.com/go-zeromq/zmq4"
 	"github.com/hugr-lab/hugr-kernel/internal/completion"
@@ -83,9 +84,11 @@ func (k *Kernel) Start(ctx context.Context) error {
 
 	var err error
 
-	k.hbSocket = zmq.NewRep(ctx)
-	k.shellSocket = zmq.NewRouter(ctx)
-	k.controlSocket = zmq.NewRouter(ctx)
+	// Recv timeout ensures sockets unblock on shutdown instead of hanging forever.
+	recvTimeout := zmq.WithTimeout(5 * time.Second)
+	k.hbSocket = zmq.NewRep(ctx, recvTimeout)
+	k.shellSocket = zmq.NewRouter(ctx, recvTimeout)
+	k.controlSocket = zmq.NewRouter(ctx, recvTimeout)
 	k.iopubSocket = zmq.NewPub(ctx)
 	k.stdinSocket = zmq.NewRouter(ctx)
 
@@ -147,14 +150,16 @@ func (k *Kernel) heartbeatLoop(ctx context.Context) {
 	for {
 		msg, err := k.hbSocket.Recv()
 		if err != nil {
-			select {
-			case <-ctx.Done():
-			default:
-				log.Printf("heartbeat recv error: %v", err)
+			if ctx.Err() != nil {
+				return
 			}
-			return
+			// Timeout — retry recv
+			continue
 		}
 		if err := k.hbSocket.Send(msg); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			log.Printf("heartbeat send error: %v", err)
 			return
 		}
@@ -165,12 +170,11 @@ func (k *Kernel) shellLoop(ctx context.Context) {
 	for {
 		zmqMsg, err := k.shellSocket.Recv()
 		if err != nil {
-			select {
-			case <-ctx.Done():
-			default:
-				log.Printf("shell recv error: %v", err)
+			if ctx.Err() != nil {
+				return
 			}
-			return
+			// Timeout — retry recv
+			continue
 		}
 
 		if !VerifySignature(k.key, zmqMsg.Frames) {
@@ -192,12 +196,11 @@ func (k *Kernel) controlLoop(ctx context.Context) {
 	for {
 		zmqMsg, err := k.controlSocket.Recv()
 		if err != nil {
-			select {
-			case <-ctx.Done():
-			default:
-				log.Printf("control recv error: %v", err)
+			if ctx.Err() != nil {
+				return
 			}
-			return
+			// Timeout — retry recv
+			continue
 		}
 
 		if !VerifySignature(k.key, zmqMsg.Frames) {

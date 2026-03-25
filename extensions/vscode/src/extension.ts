@@ -19,10 +19,27 @@ import { DirectivesTreeProvider } from './explorer/directivesTreeProvider';
 import { TypesSearchProvider } from './explorer/typesSearchProvider';
 import { showTypeDetail, showDirectiveDetail } from './explorer/detailPanel';
 import { setExtensionUri } from './explorer/icons';
+import { installKernel } from './installKernel';
 
 export function activate(context: vscode.ExtensionContext): void {
   // Set extension URI for icon resolution
   setExtensionUri(context.extensionUri);
+
+  // --- Output channel for install logs ---
+  const log = vscode.window.createOutputChannel('Hugr Kernel');
+  context.subscriptions.push(log);
+
+  // --- Install Kernel command ---
+  context.subscriptions.push(
+    vscode.commands.registerCommand('hugr.installKernel', async () => {
+      try {
+        await installKernel(log);
+      } catch (e: any) {
+        log.appendLine(`Install failed: ${e.message}`);
+        vscode.window.showErrorMessage(`Hugr Kernel install failed: ${e.message}`);
+      }
+    }),
+  );
 
   // --- Jupyter kernel completion trigger characters for GraphQL ---
   const config = vscode.workspace.getConfiguration('jupyter');

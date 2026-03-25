@@ -159,12 +159,23 @@
         "title": "Logout",
         "icon": "$(sign-out)",
         "category": "Hugr"
+      },
+      {
+        "command": "hugr.installKernel",
+        "title": "Install / Update Hugr Kernel",
+        "icon": "$(cloud-download)",
+        "category": "Hugr"
       }
     ],
     "menus": {
       "view/title": [
         {
           "command": "hugr.addConnection",
+          "when": "view == hugr.connections",
+          "group": "navigation"
+        },
+        {
+          "command": "hugr.installKernel",
           "when": "view == hugr.connections",
           "group": "navigation"
         },
