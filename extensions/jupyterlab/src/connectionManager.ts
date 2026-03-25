@@ -99,6 +99,9 @@ export class ConnectionManagerWidget extends Widget {
       this._connections = await resp.json();
       this._renderList();
       this._startAuthMonitor();
+      document.dispatchEvent(new CustomEvent('hugr:connections-changed', {
+        detail: { connections: this._connections },
+      }));
     } catch (e) {
       console.error('Failed to load connections', e);
     }
