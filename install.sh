@@ -87,7 +87,7 @@ for LOGO in logo-32x32.png logo-64x64.png; do
     fi
 done
 
-# Download and extract Perspective viewer static files
+# Download and extract Perspective viewer static files (for VS Code built-in viewer)
 STATIC_URL="https://github.com/${REPO}/releases/download/${VERSION}/perspective-static.tar.gz"
 echo "Downloading Perspective viewer assets..."
 if curl -fSL -o "${KERNEL_DIR}/perspective-static.tar.gz" "$STATIC_URL" 2>/dev/null; then
@@ -97,9 +97,23 @@ if curl -fSL -o "${KERNEL_DIR}/perspective-static.tar.gz" "$STATIC_URL" 2>/dev/n
     echo "Perspective viewer assets installed"
 else
     echo "Warning: Could not download Perspective viewer assets (non-fatal)"
-    echo "  Result rendering may fall back to plain text"
+    echo "  VS Code result rendering may fall back to plain text"
 fi
 
 echo ""
 echo "hugr-kernel ${VERSION} installed to ${KERNEL_DIR}"
-echo "Verify with: jupyter kernelspec list"
+echo ""
+
+# Install JupyterLab extensions via pip (if available)
+if command -v pip &>/dev/null; then
+    echo "Installing JupyterLab extensions..."
+    pip install "hugr-perspective-viewer>=0.2.2" 2>/dev/null && \
+        echo "  Installed: hugr-perspective-viewer (spool proxy + result viewer)" || \
+        echo "  Warning: Could not install hugr-perspective-viewer (non-fatal)"
+    echo ""
+fi
+
+echo "Verify with:"
+echo "  jupyter kernelspec list"
+echo "  jupyter labextension list"
+echo "  jupyter server extension list"

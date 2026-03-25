@@ -582,6 +582,7 @@ def setup_handlers(web_app):
     route = lambda pattern: url_path_join(base_url, "hugr", pattern)
 
     web_app.add_handlers(host_pattern, [
+        # Connection management endpoints
         (route(r"proxy/([^/]+)"), ProxyHandler),
         (route("connections"), ConnectionsHandler),
         (route(r"connections/([^/]+)/default"), ConnectionDefaultHandler),

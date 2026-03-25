@@ -10,6 +10,8 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # duckdb-kernel release to pull perspective-static from
+  PERSPECTIVE_VERSION: "v0.2.2"
 
 jobs:
   build:
@@ -93,15 +95,11 @@ jobs:
         working-directory: extensions/jupyterlab
         run: python -m build
 
-      - name: Create perspective-static tarball
+      - name: Download perspective-static from duckdb-kernel release
         run: |
-          if [ -d "static/perspective" ]; then
-            tar -czf perspective-static.tar.gz -C static perspective
-          else
-            echo "Warning: static/perspective not found, creating empty tarball"
-            mkdir -p /tmp/perspective
-            tar -czf perspective-static.tar.gz -C /tmp perspective
-          fi
+          curl -fSL -o perspective-static.tar.gz \
+            "https://github.com/hugr-lab/duckdb-kernel/releases/download/${PERSPECTIVE_VERSION}/perspective-static.tar.gz"
+          echo "Downloaded perspective-static.tar.gz from duckdb-kernel ${PERSPECTIVE_VERSION}"
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4

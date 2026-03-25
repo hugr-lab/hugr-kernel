@@ -2,9 +2,14 @@ KERNEL_DIR := $(HOME)/Library/Jupyter/kernels/hugr
 DUCKDB_KERNEL_DIR := $(CURDIR)/../duckdb-kernel
 EXT_DIR := $(CURDIR)/extensions/jupyterlab
 VSCODE_DIR := $(CURDIR)/extensions/vscode
+PYTHON := .venv/bin/python
 VENV_LABEXT := $(CURDIR)/.venv/share/jupyter/labextensions
 
-.PHONY: build install clean test copy-perspective build-ext install-ext build-kernel build-vscode build-extensions
+.PHONY: build install clean test \
+	build-kernel build-ext build-vscode build-extensions \
+	install-ext install-duckdb-extensions install-duckdb-extensions-dev install-jupyterlab
+
+# --- Build ---
 
 build: build-kernel build-ext
 
@@ -19,31 +24,52 @@ build-vscode:
 
 build-extensions: build-ext build-vscode
 
-install: install-ext copy-perspective
+# --- Install ---
+
+install: build-kernel install-ext install-duckdb-extensions
 	mkdir -p $(KERNEL_DIR)
 	@sed 's|"hugr-kernel"|"$(KERNEL_DIR)/hugr-kernel"|' kernel/kernel.json > $(KERNEL_DIR)/kernel.json
 	@ln -sfn $(CURDIR)/.venv/bin/hugr-kernel $(KERNEL_DIR)/hugr-kernel
-	@ln -sfn $(CURDIR)/.venv/bin/static $(KERNEL_DIR)/static
 	@echo "Kernel installed to $(KERNEL_DIR)"
 
+# graphql-ide (hugr-kernel's own JupyterLab extension)
 install-ext: build-ext
 	@mkdir -p $(VENV_LABEXT)/@hugr-lab
 	@ln -sfn $(EXT_DIR)/hugr_graphql_ide/labextension $(VENV_LABEXT)/@hugr-lab/jupyterlab-graphql-ide
-	@echo "Extension linked to $(VENV_LABEXT)/@hugr-lab/jupyterlab-graphql-ide"
+	@echo "Extension linked: jupyterlab-graphql-ide"
 
-copy-perspective:
-	@if [ -d "$(DUCKDB_KERNEL_DIR)/extensions/jupyterlab/hugr_perspective/labextension" ]; then \
-		mkdir -p $(VENV_LABEXT)/@hugr-lab; \
-		ln -sfn $(DUCKDB_KERNEL_DIR)/extensions/jupyterlab/hugr_perspective/labextension $(VENV_LABEXT)/@hugr-lab/perspective-viewer; \
-		echo "Perspective viewer extension linked"; \
-	else \
-		echo "Perspective viewer not found (build duckdb-kernel extension first)"; \
+# perspective-viewer from PyPI (production: via uv sync from pyproject.toml dependency)
+install-duckdb-extensions:
+	uv sync
+	@echo "Installed: hugr-perspective-viewer (from PyPI via uv sync)"
+
+# perspective-viewer from local duckdb-kernel (dev: editable install for testing changes)
+install-duckdb-extensions-dev:
+	@if [ ! -d "$(DUCKDB_KERNEL_DIR)/extensions/jupyter/perspective-viewer" ]; then \
+		echo "ERROR: duckdb-kernel not found at $(DUCKDB_KERNEL_DIR)"; \
+		echo "Run: cd $(DUCKDB_KERNEL_DIR) && make build-jupyter"; \
+		exit 1; \
 	fi
+	uv pip install -e $(DUCKDB_KERNEL_DIR)/extensions/jupyter/perspective-viewer/ --python $(PYTHON)
+	@echo "Installed: hugr-perspective-viewer (editable from duckdb-kernel)"
+
+# Full JupyterLab setup (build + install everything)
+install-jupyterlab: build install-duckdb-extensions
+	@echo "JupyterLab ready. Run: uv run jupyter lab"
+
+# --- Test ---
 
 test:
 	uv run jupyter labextension list
 	uv run jupyter server extension list
+	@echo ""
+	@echo "Expected extensions:"
+	@echo "  labextensions: @hugr-lab/jupyterlab-graphql-ide, @hugr-lab/perspective-viewer"
+	@echo "  server extensions: hugr_connection_service, hugr_perspective"
+	@echo ""
 	@echo "Run 'uv run jupyter lab' to test."
+
+# --- Clean ---
 
 clean:
 	cd $(EXT_DIR) && rm -rf lib hugr_graphql_ide/labextension node_modules

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 
 	zmq "github.com/go-zeromq/zmq4"
@@ -104,8 +105,8 @@ func (k *Kernel) Start(ctx context.Context) error {
 		return fmt.Errorf("listen stdin: %w", err)
 	}
 
-	// Start Arrow HTTP server
-	if k.spool != nil {
+	// Start Arrow HTTP server (skip if spool proxy handles serving)
+	if k.spool != nil && os.Getenv("HUGR_SPOOL_PROXY") == "" {
 		as, err := NewArrowServer(k.spool)
 		if err != nil {
 			log.Printf("Warning: failed to start Arrow HTTP server: %v", err)
