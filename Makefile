@@ -1,11 +1,12 @@
 KERNEL_DIR := $(HOME)/Library/Jupyter/kernels/hugr
+KERNEL_DEV_DIR := $(HOME)/Library/Jupyter/kernels/hugr-dev
 DUCKDB_KERNEL_DIR := $(CURDIR)/../duckdb-kernel
 EXT_DIR := $(CURDIR)/extensions/jupyterlab
 VSCODE_DIR := $(CURDIR)/extensions/vscode
 PYTHON := .venv/bin/python
 VENV_LABEXT := $(CURDIR)/.venv/share/jupyter/labextensions
 
-.PHONY: build install clean test \
+.PHONY: build install install-dev clean test \
 	build-kernel build-ext build-vscode build-extensions \
 	install-ext install-duckdb-extensions install-duckdb-extensions-dev install-jupyterlab
 
@@ -26,11 +27,21 @@ build-extensions: build-ext build-vscode
 
 # --- Install ---
 
+# Production kernel (hugr) — from release via install.sh, or manual copy.
+# Does NOT overwrite release binary with dev build.
 install: build-kernel install-ext install-duckdb-extensions
 	mkdir -p $(KERNEL_DIR)
 	@sed 's|"hugr-kernel"|"$(KERNEL_DIR)/hugr-kernel"|' kernel/kernel.json > $(KERNEL_DIR)/kernel.json
 	@cp -f $(CURDIR)/.venv/bin/hugr-kernel $(KERNEL_DIR)/hugr-kernel
 	@echo "Kernel installed to $(KERNEL_DIR)"
+
+# Dev kernel (hugr-dev) — separate kernel spec, can run alongside release.
+# Safe to rebuild without killing running release kernels.
+install-dev: build-kernel install-ext install-duckdb-extensions
+	mkdir -p $(KERNEL_DEV_DIR)
+	@sed 's|"hugr-kernel"|"$(KERNEL_DEV_DIR)/hugr-kernel"|; s|"Hugr GraphQL"|"Hugr GraphQL (dev)"|' kernel/kernel.json > $(KERNEL_DEV_DIR)/kernel.json
+	@cp -f $(CURDIR)/.venv/bin/hugr-kernel $(KERNEL_DEV_DIR)/hugr-kernel
+	@echo "Dev kernel installed to $(KERNEL_DEV_DIR)"
 
 # graphql-ide (hugr-kernel's own JupyterLab extension)
 install-ext: build-ext
@@ -53,8 +64,8 @@ install-duckdb-extensions-dev:
 	uv pip install -e $(DUCKDB_KERNEL_DIR)/extensions/jupyter/perspective-viewer/ --python $(PYTHON)
 	@echo "Installed: hugr-perspective-viewer (editable from duckdb-kernel)"
 
-# Full JupyterLab setup (build + install everything)
-install-jupyterlab: build install-duckdb-extensions
+# Full JupyterLab setup (build + install dev kernel + everything)
+install-jupyterlab: install-dev
 	@echo "JupyterLab ready. Run: uv run jupyter lab"
 
 # --- Test ---
