@@ -54,6 +54,25 @@ jobs:
           test -d extensions/jupyterlab/hugr_graphql_ide/labextension/static
           echo "labextension build OK"
 
+      - name: Verify wheel builds
+        working-directory: extensions/jupyterlab
+        run: |
+          pip install build hatchling hatch-jupyter-builder hatch-nodejs-version
+          cp -r ../../hugr_connection_service .
+          python -m build
+          ls -la dist/
+          echo "Wheel build OK"
+
+      - name: Install and verify extensions
+        run: |
+          pip install hugr-perspective-viewer>=0.2.2
+          pip install extensions/jupyterlab/dist/*.whl
+          jupyter labextension list 2>&1 | grep -q "@hugr-lab/jupyterlab-graphql-ide"
+          jupyter labextension list 2>&1 | grep -q "@hugr-lab/perspective-viewer"
+          jupyter server extension list 2>&1 | grep -q "hugr_connection_service"
+          jupyter server extension list 2>&1 | grep -q "hugr_perspective"
+          echo "All extensions verified OK"
+
   build-vscode:
     runs-on: ubuntu-latest
     steps:

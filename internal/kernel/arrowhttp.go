@@ -167,8 +167,9 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 	flusher, canFlush := w.(http.Flusher)
 	schema := reader.Schema()
 
-	// Detect geometry columns in the schema
-	geoCols := geoarrow.DetectGeometryColumns(schema)
+	// Detect geometry columns: native GeoArrow (already converted) + WKB (fallback).
+	geoIndices := detectNativeGeoColumns(schema)
+	wkbCols := geoarrow.DetectGeometryColumns(schema) // WKB that wasn't converted in pipeline
 
 	// Build column projection set
 	var projectCols map[string]bool
@@ -202,28 +203,34 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 			last = true
 		}
 
-		// Apply GeoArrow conversion or string replacement for geometry columns
-		if len(geoCols) > 0 {
-			if wantGeoArrow {
-				// Convert WKB → native GeoArrow struct arrays
-				for _, gc := range geoCols {
-					if gc.Format != "WKB" {
-						continue
-					}
-					converted, _, err := geoarrow.ConvertBatch(writeRec, gc, 0, memory.DefaultAllocator)
-					if err != nil {
-						log.Printf("geoarrow convert error for column %s: %v", gc.Name, err)
-						continue
-					}
+		if wantGeoArrow {
+			// Fallback: convert any remaining WKB columns that weren't
+			// converted in the pipeline (e.g. LargeBinary).
+			for _, gc := range wkbCols {
+				if gc.Format != "WKB" {
+					continue
+				}
+				converted, _, err := geoarrow.ConvertBatch(writeRec, gc, 0, memory.DefaultAllocator)
+				if err != nil {
+					log.Printf("geoarrow fallback convert error for %s: %v", gc.Name, err)
+					continue
+				}
+				if converted != writeRec {
 					if sliced {
 						writeRec.Release()
 					}
 					writeRec = converted
-					sliced = true // mark for release
+					sliced = true
 				}
-			} else {
-				// Replace geometry columns with "{geometry}" string for Perspective
-				replaced := replaceGeomColumns(writeRec, geoCols)
+			}
+		} else {
+			// Replace all geometry columns (native + WKB) with "{geometry}".
+			allGeo := geoIndices
+			for _, gc := range wkbCols {
+				allGeo = append(allGeo, gc.Index)
+			}
+			if len(allGeo) > 0 {
+				replaced := replaceGeoColumnsByIndex(writeRec, allGeo)
 				if replaced != nil {
 					if sliced {
 						writeRec.Release()
@@ -380,62 +387,77 @@ func (as *ArrowServer) streamRawFile(w http.ResponseWriter, path string) {
 	}
 }
 
-// replaceGeomColumns replaces geometry columns with "{geometry}" strings in a single record.
-func replaceGeomColumns(rec arrow.RecordBatch, geoCols []geoarrow.GeometryColumn) arrow.RecordBatch {
-	if len(geoCols) == 0 {
+// detectNativeGeoColumns finds columns with native GeoArrow extension types
+// (geoarrow.multipoint, geoarrow.multilinestring, geoarrow.multipolygon, etc.)
+// in a schema. Returns their indices.
+func detectNativeGeoColumns(schema *arrow.Schema) []int {
+	var indices []int
+	for i, f := range schema.Fields() {
+		if f.Metadata.Len() == 0 {
+			continue
+		}
+		idx := f.Metadata.FindKey("ARROW:extension:name")
+		if idx < 0 {
+			continue
+		}
+		ext := f.Metadata.Values()[idx]
+		if strings.HasPrefix(ext, "geoarrow.") || strings.HasPrefix(ext, "ogc.") {
+			indices = append(indices, i)
+		}
+	}
+	return indices
+}
+
+// replaceGeoColumnsByIndex replaces geometry columns (by index) with "{geometry}" strings.
+func replaceGeoColumnsByIndex(rec arrow.RecordBatch, geoIndices []int) arrow.RecordBatch {
+	if len(geoIndices) == 0 {
 		return nil
 	}
 	numRows := int(rec.NumRows())
-	result := rec
-
-	for _, gc := range geoCols {
-		if gc.Index >= int(result.NumCols()) {
-			continue
-		}
-
-		bldr := array.NewStringBuilder(memory.DefaultAllocator)
-		origCol := result.Column(gc.Index)
-		for i := 0; i < numRows; i++ {
-			if origCol.IsNull(i) {
-				bldr.AppendNull()
-			} else {
-				bldr.Append("{geometry}")
-			}
-		}
-		strArr := bldr.NewArray()
-		bldr.Release()
-
-		field := result.Schema().Field(gc.Index)
-		newField := arrow.Field{
-			Name:     field.Name,
-			Type:     arrow.BinaryTypes.String,
-			Nullable: true,
-		}
-		fields := make([]arrow.Field, len(result.Schema().Fields()))
-		copy(fields, result.Schema().Fields())
-		fields[gc.Index] = newField
-		meta := result.Schema().Metadata()
-		newSchema := arrow.NewSchema(fields, &meta)
-
-		cols := make([]arrow.Array, result.NumCols())
-		for i := range int(result.NumCols()) {
-			if i == gc.Index {
-				cols[i] = strArr
-			} else {
-				cols[i] = result.Column(i)
-			}
-		}
-
-		newRec := array.NewRecordBatch(newSchema, cols, int64(numRows))
-		strArr.Release()
-
-		if result != rec {
-			result.Release()
-		}
-		result = newRec
+	geoSet := make(map[int]bool, len(geoIndices))
+	for _, idx := range geoIndices {
+		geoSet[idx] = true
 	}
 
-	return result
+	fields := make([]arrow.Field, len(rec.Schema().Fields()))
+	copy(fields, rec.Schema().Fields())
+	cols := make([]arrow.Array, rec.NumCols())
+
+	var strArrays []arrow.Array // track for release
+	for i := 0; i < int(rec.NumCols()); i++ {
+		if geoSet[i] {
+			bldr := array.NewStringBuilder(memory.DefaultAllocator)
+			origCol := rec.Column(i)
+			for j := 0; j < numRows; j++ {
+				if origCol.IsNull(j) {
+					bldr.AppendNull()
+				} else {
+					bldr.Append("{geometry}")
+				}
+			}
+			strArr := bldr.NewArray()
+			bldr.Release()
+			cols[i] = strArr
+			strArrays = append(strArrays, strArr)
+			fields[i] = arrow.Field{
+				Name:     fields[i].Name,
+				Type:     arrow.BinaryTypes.String,
+				Nullable: true,
+			}
+		} else {
+			cols[i] = rec.Column(i)
+		}
+	}
+
+	meta := rec.Schema().Metadata()
+	newSchema := arrow.NewSchema(fields, &meta)
+	newRec := array.NewRecordBatch(newSchema, cols, int64(numRows))
+
+	for _, arr := range strArrays {
+		arr.Release()
+	}
+
+	return newRec
 }
 
 // projectRecord selects only the named columns from a record batch.

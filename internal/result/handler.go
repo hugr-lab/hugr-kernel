@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/apache/arrow-go/v18/arrow"
-	"github.com/apache/arrow-go/v18/arrow/memory"
+	"github.com/hugr-lab/duckdb-kernel/pkg/flatten"
 	"github.com/hugr-lab/duckdb-kernel/pkg/geoarrow"
 	"github.com/hugr-lab/query-engine/types"
 )
@@ -233,84 +233,83 @@ func (h *Handler) walkData(prefix string, data map[string]any, queryID string, p
 }
 
 func (h *Handler) handleArrowPart(path, title, partID string, table types.ArrowTable) (*PartDef, string) {
-	records, err := table.Records()
+	reader, err := table.Reader(false)
 	if err != nil {
-		log.Printf("arrow records error for %s: %v", path, err)
+		log.Printf("arrow reader error for %s: %v", path, err)
 		return nil, fmt.Sprintf("[%s] Error reading Arrow data: %v", title, err)
 	}
-	if len(records) == 0 {
+	defer reader.Release()
+
+	// Pipeline: source → Flatten → GeoArrow → spool write
+	// Each stage is a RecordReader; batches flow one at a time.
+	flatReader := flatten.NewConverter(reader)
+	defer flatReader.Release()
+
+	geoReader := geoarrow.NewConverter(flatReader, geoarrow.WithBufferSize(2))
+	defer geoReader.Release()
+
+	var totalRows int64
+	var columns []ColumnDef
+	var geometryColumns []GeometryColumnMeta
+	schemaSet := false
+
+	// Stream through pipeline: extract metadata + write to spool
+	var sw *StreamWriter
+	if h.spool != nil {
+		sw, err = h.spool.NewStreamWriter(partID)
+		if err != nil {
+			log.Printf("spool create error for %s: %v", path, err)
+			sw = nil
+		}
+	}
+
+	for geoReader.Next() {
+		rec := geoReader.RecordBatch()
+
+		if !schemaSet {
+			schema := rec.Schema()
+			columns = make([]ColumnDef, schema.NumFields())
+			for i, field := range schema.Fields() {
+				columns[i] = ColumnDef{
+					Name: field.Name,
+					Type: field.Type.String(),
+				}
+			}
+			// Detect geometry columns from processed schema.
+			// After pipeline, WKB columns are converted to native GeoArrow,
+			// so we detect both native GeoArrow and hugr-specific extensions.
+			geometryColumns = detectAllGeometryColumns(schema)
+			schemaSet = true
+		}
+
+		totalRows += rec.NumRows()
+
+		if sw != nil {
+			if err := sw.Write(rec); err != nil {
+				log.Printf("spool write error for %s: %v", path, err)
+				break
+			}
+		}
+	}
+
+	if sw != nil {
+		sw.Close()
+		if err := h.spool.Cleanup(); err != nil {
+			log.Printf("spool cleanup error: %v", err)
+		}
+	}
+
+	if err := geoReader.Err(); err != nil {
+		log.Printf("pipeline error for %s: %v", path, err)
+	}
+
+	if totalRows == 0 {
 		return &PartDef{
 			ID:    path,
 			Type:  "arrow",
 			Title: title,
 			Rows:  0,
 		}, fmt.Sprintf("[%s] (no rows)", title)
-	}
-
-	// Flatten complex types (Struct→dot-separated columns, List/Map/Union→JSON strings)
-	// so Perspective viewer can display them correctly.
-	if types.NeedsFlatten(records[0].Schema()) {
-		mem := memory.DefaultAllocator
-		for i, rec := range records {
-			flat := types.FlattenRecord(rec, mem)
-			rec.Release()
-			records[i] = flat
-		}
-	}
-
-	// Calculate total rows
-	var totalRows int64
-	for _, rec := range records {
-		totalRows += rec.NumRows()
-	}
-
-	// Extract column definitions from schema
-	schema := records[0].Schema()
-	columns := make([]ColumnDef, schema.NumFields())
-	for i, field := range schema.Fields() {
-		columns[i] = ColumnDef{
-			Name: field.Name,
-			Type: field.Type.String(),
-		}
-	}
-
-	// Detect geometry columns from Arrow schema metadata
-	geoCols := geoarrow.DetectGeometryColumns(schema)
-	var geometryColumns []GeometryColumnMeta
-	for _, gc := range geoCols {
-		geometryColumns = append(geometryColumns, GeometryColumnMeta{
-			Name:   gc.Name,
-			SRID:   gc.SRID,
-			Format: gc.Format,
-		})
-	}
-	// Detect hugr-specific geometry extensions (H3Cell, GeoJSON)
-	// that are not handled by geoarrow.DetectGeometryColumns
-	geometryColumns = append(geometryColumns, detectHugrGeometryColumns(schema)...)
-
-	// Spool to disk
-	if h.spool != nil {
-		sw, err := h.spool.NewStreamWriter(partID)
-		if err != nil {
-			log.Printf("spool create error for %s: %v", path, err)
-		} else {
-			for _, rec := range records {
-				if err := sw.Write(rec); err != nil {
-					log.Printf("spool write error for %s: %v", path, err)
-					break
-				}
-			}
-			sw.Close()
-
-			if err := h.spool.Cleanup(); err != nil {
-				log.Printf("spool cleanup error: %v", err)
-			}
-		}
-	}
-
-	// Release records
-	for _, rec := range records {
-		rec.Release()
 	}
 
 	part := &PartDef{
@@ -339,9 +338,8 @@ func (h *Handler) handleArrowPart(path, title, partID string, table types.ArrowT
 	return part, text
 }
 
-// detectHugrGeometryColumns finds hugr-specific geometry columns (H3Cell, GeoJSON)
-// by checking ARROW:extension:name for "hugr.h3cell" and "hugr.geojson".
-func detectHugrGeometryColumns(schema *arrow.Schema) []GeometryColumnMeta {
+// detectAllGeometryColumns finds all geometry columns: native GeoArrow + hugr-specific.
+func detectAllGeometryColumns(schema *arrow.Schema) []GeometryColumnMeta {
 	var cols []GeometryColumnMeta
 	for _, f := range schema.Fields() {
 		if f.Metadata.Len() == 0 {
@@ -355,6 +353,16 @@ func detectHugrGeometryColumns(schema *arrow.Schema) []GeometryColumnMeta {
 
 		var format string
 		switch ext {
+		case "geoarrow.multipoint":
+			format = "GeoArrow"
+		case "geoarrow.multilinestring":
+			format = "GeoArrow"
+		case "geoarrow.multipolygon":
+			format = "GeoArrow"
+		case "geoarrow.point", "geoarrow.linestring", "geoarrow.polygon":
+			format = "GeoArrow"
+		case "geoarrow.wkb", "ogc.wkb":
+			format = "WKB"
 		case "hugr.h3cell":
 			format = "H3Cell"
 		case "hugr.geojson":
@@ -363,12 +371,12 @@ func detectHugrGeometryColumns(schema *arrow.Schema) []GeometryColumnMeta {
 			continue
 		}
 
-		srid := 0
+		srid := 4326
 		if mi := f.Metadata.FindKey("ARROW:extension:metadata"); mi >= 0 {
 			var m struct {
 				SRID int `json:"srid"`
 			}
-			if err := json.Unmarshal([]byte(f.Metadata.Values()[mi]), &m); err == nil {
+			if err := json.Unmarshal([]byte(f.Metadata.Values()[mi]), &m); err == nil && m.SRID != 0 {
 				srid = m.SRID
 			}
 		}
