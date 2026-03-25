@@ -108,7 +108,7 @@ echo ""
 VERSION_NUM="${VERSION#v}"
 if command -v pip &>/dev/null; then
     echo "Installing JupyterLab extensions..."
-    pip install "hugr-perspective-viewer>=0.3.0" 2>/dev/null && \
+    pip install "hugr-perspective-viewer>=0.3.1" 2>/dev/null && \
         echo "  Installed: hugr-perspective-viewer (spool proxy + result viewer)" || \
         echo "  Warning: Could not install hugr-perspective-viewer (non-fatal)"
     pip install "hugr-graphql-ide>=${VERSION_NUM}" 2>/dev/null && \

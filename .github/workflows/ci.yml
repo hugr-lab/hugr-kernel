@@ -65,7 +65,7 @@ jobs:
 
       - name: Install and verify extensions
         run: |
-          pip install "hugr-perspective-viewer>=0.3.0"
+          pip install "hugr-perspective-viewer>=0.3.1"
           pip install extensions/jupyterlab/dist/*.whl
 
           echo "--- labextension list ---"

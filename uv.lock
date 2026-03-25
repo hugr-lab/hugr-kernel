@@ -883,7 +883,7 @@ requires-dist = [
     { name = "authlib", specifier = ">=1.3" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "hugr-client", specifier = ">=0.1.0" },
-    { name = "hugr-perspective-viewer", specifier = ">=0.3.0" },
+    { name = "hugr-perspective-viewer", specifier = ">=0.3.1" },
     { name = "ipykernel", specifier = ">=6.0" },
     { name = "jupyter-server", specifier = ">=2.0" },
     { name = "jupyterlab", specifier = ">=4.0" },
@@ -896,14 +896,14 @@ dev = [{ name = "hatchling" }]
 
 [[package]]
 name = "hugr-perspective-viewer"
-version = "0.3.0"
+version = "0.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jupyter-server" },
     { name = "pyarrow" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/81/37/a9cd11b955c16a24e54343aa78e4d3da08c84793dcd3d1d9cca5f5a445ee/hugr_perspective_viewer-0.3.0-py3-none-any.whl", hash = "sha256:4e13645ef1d581ff7c08aaa1d4385ea4475abc6625b7afbd008f717f249912e8", size = 9670125, upload-time = "2026-03-25T16:29:53.108Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/2e/346459cba0140f575abb720e686d648e8656165c726a1de628823dcaf8ab/hugr_perspective_viewer-0.3.1-py3-none-any.whl", hash = "sha256:7056b78f1cd95a2e22173a4c2ee608fa21ad99ec9169fc7e6b50619990398818", size = 9670295, upload-time = "2026-03-25T19:15:46.376Z" },
 ]
 
 [[package]]
