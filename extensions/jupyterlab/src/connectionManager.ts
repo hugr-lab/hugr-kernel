@@ -29,21 +29,13 @@ const ICON_PLUS = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16
 const ICON_STAR = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
 const ICON_STAR_FILLED = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
 
-function getXsrfToken(): string {
-  const match = document.cookie.match(/(?:^|;\s*)_xsrf=([^;]*)/);
-  return match ? decodeURIComponent(match[1]) : '';
-}
-
 function makeRequest(method: string, body?: any): RequestInit {
-  const headers: Record<string, string> = {
-    'X-XSRFToken': getXsrfToken(),
-  };
+  const headers: Record<string, string> = {};
   if (body) {
     headers['Content-Type'] = 'application/json';
   }
   return {
     method,
-    credentials: 'same-origin',
     headers,
     ...(body ? { body: JSON.stringify(body) } : {}),
   };
