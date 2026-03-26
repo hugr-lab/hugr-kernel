@@ -44,9 +44,13 @@ install-dev: build-kernel install-ext install-duckdb-extensions
 	@echo "Dev kernel installed to $(KERNEL_DEV_DIR)"
 
 # graphql-ide (hugr-kernel's own JupyterLab extension)
+# In dev mode we symlink labextension + ensure server extension config exists
+# (normally hatch shared-data copies it, but we skip pip install in dev)
 install-ext: build-ext
 	@mkdir -p $(VENV_LABEXT)/@hugr-lab
 	@ln -sfn $(EXT_DIR)/hugr_graphql_ide/labextension $(VENV_LABEXT)/@hugr-lab/jupyterlab-graphql-ide
+	@mkdir -p $(CURDIR)/.venv/etc/jupyter/jupyter_server_config.d
+	@cp $(EXT_DIR)/jupyter-config/hugr_connection_service.json $(CURDIR)/.venv/etc/jupyter/jupyter_server_config.d/ 2>/dev/null || true
 	@echo "Extension linked: jupyterlab-graphql-ide"
 
 # perspective-viewer from PyPI (production: via uv sync from pyproject.toml dependency)
