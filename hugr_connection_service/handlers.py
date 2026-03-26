@@ -48,42 +48,23 @@ def _find_connection(cfg: dict, name: str):
 
 def _test_connection(url: str, auth_type: str = "public", **kwargs) -> dict:
     """Test connection using HugrClient which handles IPC multipart responses."""
-    import os
     from hugr.client import HugrClient
 
     try:
-        # TODO: remove env workaround when hugr-client supports api_key_header in constructor
-        api_key_header = kwargs.get("api_key_header")
-        old_header_env = os.environ.get("HUGR_API_KEY_HEADER")
-        if api_key_header:
-            os.environ["HUGR_API_KEY_HEADER"] = api_key_header
-
         client = HugrClient(
             url=url,
             api_key=kwargs.get("api_key") if auth_type == "api_key" else None,
-            token=kwargs.get("token") if auth_type in ("bearer", "hub") else None,
+            api_key_header=kwargs.get("api_key_header") if auth_type == "api_key" else None,
+            token=kwargs.get("token") if auth_type in ("bearer", "hub", "browser") else None,
             role=kwargs.get("role"),
         )
         resp = client.query("{ function { core { info { version } } } }")
-        # Restore env
-        if api_key_header:
-            if old_header_env is not None:
-                os.environ["HUGR_API_KEY_HEADER"] = old_header_env
-            else:
-                os.environ.pop("HUGR_API_KEY_HEADER", None)
-
-        # Extract version from the response
         for path, part in resp.parts.items():
             data = part.dict() if hasattr(part, "dict") else {}
             if isinstance(data, dict) and "version" in data:
                 return {"ok": True, "version": data["version"]}
         return {"ok": True, "version": "unknown"}
     except Exception as e:
-        if api_key_header:
-            if old_header_env is not None:
-                os.environ["HUGR_API_KEY_HEADER"] = old_header_env
-            else:
-                os.environ.pop("HUGR_API_KEY_HEADER", None)
         return {"ok": False, "error": str(e)}
 
 
@@ -328,6 +309,13 @@ class ConnectionTestHandler(APIHandler):
         token = conn.get("token")
         if auth_type == "hub":
             token = (conn.get("tokens") or {}).get("access_token")
+        elif auth_type == "browser":
+            from . import oidc
+            token_data = oidc.get_token(name)
+            if token_data:
+                token = token_data.get("access_token")
+            elif (conn.get("tokens") or {}).get("access_token"):
+                token = conn["tokens"]["access_token"]
         result = _test_connection(
             conn["url"],
             auth_type=auth_type,
