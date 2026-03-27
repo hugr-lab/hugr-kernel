@@ -17,6 +17,7 @@ export interface HugrClientOptions {
   apiKey?: string;
   token?: string;
   timeout?: number;
+  tlsSkipVerify?: boolean;
 }
 
 export interface HugrResponse {
@@ -141,6 +142,7 @@ export class HugrClient {
   private _apiKey?: string;
   private _token?: string;
   private _timeout: number;
+  private _tlsSkipVerify: boolean;
   private _aborted = false;
 
   constructor(options: HugrClientOptions) {
@@ -149,6 +151,7 @@ export class HugrClient {
     this._apiKey = options.apiKey;
     this._token = options.token;
     this._timeout = options.timeout ?? 10000;
+    this._tlsSkipVerify = options.tlsSkipVerify ?? false;
   }
 
   get url(): string {
@@ -199,6 +202,7 @@ export class HugrClient {
         method: 'POST',
         headers,
         timeout: this._timeout,
+        rejectUnauthorized: !this._tlsSkipVerify,
       }, (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (chunk: Buffer) => { chunks.push(chunk); });

@@ -83,11 +83,13 @@ class HubTokenProvider:
         self,
         connection_name: str,
         initial_access_token: str | None = None,
+        tls_skip_verify: bool = False,
     ):
         self.connection_name = connection_name
         self.hub_api_url = os.environ.get("JUPYTERHUB_API_URL", "")
         self.hub_token = os.environ.get("JUPYTERHUB_API_TOKEN", "")
         self.hub_user = os.environ.get("JUPYTERHUB_USER", "")
+        self._tls_skip_verify = tls_skip_verify
         self._refresh_handle = None
         self._backoff_delay = 5
         self._last_token = None
@@ -144,7 +146,7 @@ class HubTokenProvider:
     async def _do_refresh(self):
         """Fetch fresh access_token from JupyterHub API."""
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=not self._tls_skip_verify) as client:
                 resp = await client.get(
                     f"{self.hub_api_url}/users/{self.hub_user}",
                     headers={"Authorization": f"Bearer {self.hub_token}"},

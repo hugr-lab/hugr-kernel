@@ -5,6 +5,7 @@
 
 import { Widget } from '@lumino/widgets';
 import { LabIcon } from '@jupyterlab/ui-components';
+import { PageConfig } from '@jupyterlab/coreutils';
 import { HugrClient } from '../hugrClient';
 
 const explorerIcon = new LabIcon({
@@ -244,17 +245,13 @@ export class HugrExplorerWidget extends Widget {
       return n === name;
     });
 
-    const url = (conn?.url || '').replace(/\/+$/, '');
-    const authType = conn?.auth_type || 'public';
+    // Always use proxy — handles auth and TLS (self-signed certs) server-side
+    const proxyUrl = `${PageConfig.getBaseUrl()}hugr/proxy/${encodeURIComponent(name)}`;
 
     this._client = new HugrClient({
-      url,
-      authType,
-      apiKey: conn?.api_key,
-      apiKeyHeader: conn?.api_key_header,
-      token: conn?.token,
-      role: conn?.role,
-      connectionName: (authType === 'browser' || authType === 'hub') ? name : undefined,
+      url: proxyUrl,
+      authType: 'public', // proxy adds auth headers server-side
+      connectionName: name,
     });
 
     this._selectedConnection = name;

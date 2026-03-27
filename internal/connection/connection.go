@@ -2,9 +2,11 @@ package connection
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -31,11 +33,12 @@ const (
 
 // Connection represents a named Hugr endpoint with its configuration.
 type Connection struct {
-	Name     string
-	URL      string
-	AuthMode AuthMode
-	Managed  bool // Hub-managed connection, read-only for users
-	Timeout  time.Duration
+	Name           string
+	URL            string
+	AuthMode       AuthMode
+	Managed        bool // Hub-managed connection, read-only for users
+	TLSSkipVerify  bool // Skip TLS certificate verification (self-signed certs)
+	Timeout        time.Duration
 
 	// Browser auth token fields (in-memory cache, loaded from connections.json)
 	accessToken string
@@ -93,8 +96,23 @@ func (c *Connection) Query(ctx context.Context, query string, vars map[string]an
 
 // recreateClient rebuilds the client with current options. Must be called with mu held.
 func (c *Connection) recreateClient() {
-	opts := append([]client.Option{client.WithTimeout(c.Timeout)}, c.options...)
+	// TLS transport must come BEFORE auth options — auth transports wrap the base transport.
+	var opts []client.Option
+	opts = append(opts, client.WithTimeout(c.Timeout))
+	if c.TLSSkipVerify {
+		opts = append(opts, client.WithTransport(&http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}))
+	}
+	opts = append(opts, c.options...)
 	c.client = client.NewClient(c.URL, opts...)
+}
+
+// Recreate rebuilds the client with current options. Use after changing fields directly.
+func (c *Connection) Recreate() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.recreateClient()
 }
 
 // SetAPIKey sets the API key auth mode and recreates the client.

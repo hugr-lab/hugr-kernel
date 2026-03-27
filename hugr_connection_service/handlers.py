@@ -57,6 +57,7 @@ def _test_connection(url: str, auth_type: str = "public", **kwargs) -> dict:
             api_key_header=kwargs.get("api_key_header") if auth_type == "api_key" else None,
             token=kwargs.get("token") if auth_type in ("bearer", "hub", "browser") else None,
             role=kwargs.get("role"),
+            tls_skip_verify=kwargs.get("tls_skip_verify", False),
         )
         resp = client.query("{ function { core { info { version } } } }")
         for path, part in resp.parts.items():
@@ -68,13 +69,28 @@ def _test_connection(url: str, auth_type: str = "public", **kwargs) -> dict:
         return {"ok": False, "error": str(e)}
 
 
+_proxy_name: str | None = None
+_proxy_conn: dict | None = None
+
+
 class ProxyHandler(JupyterHandler):
     """POST /hugr/proxy/<connection_name> — proxy request to Hugr server."""
 
     @tornado.web.authenticated
     async def post(self, connection_name: str):
-        cfg = _load_config()
-        conn = _find_connection(cfg, connection_name)
+        global _proxy_name, _proxy_conn
+        try:
+            if _proxy_name != connection_name:
+                cfg = _load_config()
+                _proxy_conn = _find_connection(cfg, connection_name)
+                _proxy_name = connection_name
+        except Exception as e:
+            import traceback
+            self.log.error("Proxy config error: %s\n%s", e, traceback.format_exc())
+            self.set_status(500)
+            self.finish(json.dumps({"error": f"config error: {e}"}))
+            return
+        conn = _proxy_conn
         if not conn:
             self.set_status(404)
             self.finish(json.dumps({"error": "not found"}))
@@ -107,6 +123,7 @@ class ProxyHandler(JupyterHandler):
         if conn.get("role"):
             headers["X-Hugr-Role"] = conn["role"]
 
+        tls_skip = conn.get("tls_skip_verify", False)
         client = tornado.httpclient.AsyncHTTPClient()
         try:
             response = await client.fetch(
@@ -115,6 +132,7 @@ class ProxyHandler(JupyterHandler):
                 headers=headers,
                 body=self.request.body,
                 request_timeout=30,
+                validate_cert=not tls_skip,
             )
         except tornado.httpclient.HTTPClientError as e:
             if e.response is not None:
@@ -217,6 +235,8 @@ class ConnectionsHandler(APIHandler):
             entry["token"] = body["token"]
         if body.get("role"):
             entry["role"] = body["role"]
+        if body.get("tls_skip_verify"):
+            entry["tls_skip_verify"] = True
         cfg.setdefault("connections", []).append(entry)
         if not cfg.get("default"):
             cfg["default"] = name
@@ -255,6 +275,8 @@ class ConnectionHandler(APIHandler):
             conn["token"] = body["token"]
         if body.get("role"):
             conn["role"] = body["role"]
+        if "tls_skip_verify" in body:
+            conn["tls_skip_verify"] = bool(body["tls_skip_verify"])
         _save_config(cfg)
         self.finish(json.dumps(conn))
 
@@ -323,6 +345,7 @@ class ConnectionTestHandler(APIHandler):
             api_key_header=conn.get("api_key_header"),
             token=token,
             role=conn.get("role"),
+            tls_skip_verify=conn.get("tls_skip_verify", False),
         )
         self.finish(json.dumps(result))
 
@@ -354,7 +377,7 @@ class TestHandler(APIHandler):
             base_url = self.settings.get("base_url", "/")
             callback_base = f"{self.request.protocol}://{self.request.host}{base_url.rstrip('/')}"
             try:
-                auth_url = oidc.start_login(test_id, url, callback_base)
+                auth_url = oidc.start_login(test_id, url, callback_base, tls_skip_verify=body.get("tls_skip_verify", False))
             except ValueError as e:
                 _test_results.pop(test_id, None)
                 self.set_status(400)
@@ -368,8 +391,10 @@ class TestHandler(APIHandler):
             url,
             auth_type=auth_type,
             api_key=body.get("api_key"),
+            api_key_header=body.get("api_key_header"),
             token=body.get("token"),
             role=body.get("role"),
+            tls_skip_verify=body.get("tls_skip_verify", False),
         )
         self.finish(json.dumps(result))
 
@@ -414,7 +439,7 @@ class ConnectionLoginHandler(APIHandler):
         callback_base = f"{self.request.protocol}://{self.request.host}{base_url.rstrip('/')}"
 
         try:
-            auth_url = oidc.start_login(name, conn["url"], callback_base)
+            auth_url = oidc.start_login(name, conn["url"], callback_base, tls_skip_verify=conn.get("tls_skip_verify", False))
         except ValueError as e:
             self.set_status(409 if "already in progress" in str(e) else 400)
             self.finish(json.dumps({"error": str(e)}))
@@ -480,6 +505,7 @@ class OAuthCallbackHandler(JupyterHandler):
                     url,
                     auth_type="bearer",
                     token=session.access_token,
+                    tls_skip_verify=session.tls_skip_verify,
                 )
                 _test_results[conn_name] = result
             except Exception as e:
@@ -600,7 +626,7 @@ class ConnectionDiscoverHandler(APIHandler):
             return
 
         from . import oidc
-        auth_config = oidc.discover_auth_config(conn["url"])
+        auth_config = oidc.discover_auth_config(conn["url"], tls_skip_verify=conn.get("tls_skip_verify", False))
         if auth_config:
             self.finish(json.dumps({"oidc_available": True, **auth_config}))
         else:
@@ -620,7 +646,7 @@ class DiscoverHandler(APIHandler):
             return
 
         from . import oidc
-        auth_config = oidc.discover_auth_config(url)
+        auth_config = oidc.discover_auth_config(url, tls_skip_verify=body.get("tls_skip_verify", False))
         if auth_config:
             self.finish(json.dumps({"oidc_available": True, **auth_config}))
         else:

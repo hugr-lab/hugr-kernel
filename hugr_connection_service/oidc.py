@@ -28,13 +28,14 @@ class PendingLogin:
 
     def __init__(self, connection_name: str, code_verifier: str,
                  token_endpoint: str, client_id: str, redirect_uri: str,
-                 issuer: str):
+                 issuer: str, tls_skip_verify: bool = False):
         self.connection_name = connection_name
         self.code_verifier = code_verifier
         self.token_endpoint = token_endpoint
         self.client_id = client_id
         self.redirect_uri = redirect_uri
         self.issuer = issuer
+        self.tls_skip_verify = tls_skip_verify
         self.created_at = time.time()
 
 
@@ -43,7 +44,8 @@ class LoginSession:
 
     def __init__(self, connection_name: str, refresh_token: str,
                  access_token: str, expires_at: float,
-                 token_endpoint: str, client_id: str, issuer: str):
+                 token_endpoint: str, client_id: str, issuer: str,
+                 tls_skip_verify: bool = False):
         self.connection_name = connection_name
         self.refresh_token = refresh_token
         self.access_token = access_token
@@ -51,6 +53,7 @@ class LoginSession:
         self.token_endpoint = token_endpoint
         self.client_id = client_id
         self.issuer = issuer
+        self.tls_skip_verify = tls_skip_verify
         self._refresh_handle = None
 
     def start_refresh_timer(self):
@@ -69,7 +72,7 @@ class LoginSession:
         """Execute token refresh."""
         self._refresh_handle = None
         try:
-            with httpx.Client(timeout=10) as client:
+            with httpx.Client(timeout=10, verify=not self.tls_skip_verify) as client:
                 resp = client.post(self.token_endpoint, data={
                     "grant_type": "refresh_token",
                     "refresh_token": self.refresh_token,
@@ -164,7 +167,7 @@ def _generate_pkce() -> tuple[str, str]:
     return verifier, challenge
 
 
-def discover_auth_config(hugr_url: str) -> dict | None:
+def discover_auth_config(hugr_url: str, tls_skip_verify: bool = False) -> dict | None:
     """Fetch OIDC config from Hugr server's GET /auth/config endpoint.
 
     Returns {"issuer": "...", "client_id": "..."} or None if not configured.
@@ -175,7 +178,7 @@ def discover_auth_config(hugr_url: str) -> dict | None:
         base = base[:-4]
 
     try:
-        with httpx.Client(timeout=5) as client:
+        with httpx.Client(timeout=5, verify=not tls_skip_verify) as client:
             resp = client.get(f"{base}/auth/config")
         if resp.status_code == 200:
             data = resp.json()
@@ -187,16 +190,16 @@ def discover_auth_config(hugr_url: str) -> dict | None:
         return None
 
 
-def _discover_oidc_endpoints(issuer: str) -> dict:
+def _discover_oidc_endpoints(issuer: str, tls_skip_verify: bool = False) -> dict:
     """Fetch OIDC discovery document from issuer."""
     url = f"{issuer.rstrip('/')}/.well-known/openid-configuration"
-    with httpx.Client(timeout=5) as client:
+    with httpx.Client(timeout=5, verify=not tls_skip_verify) as client:
         resp = client.get(url)
         resp.raise_for_status()
     return resp.json()
 
 
-def start_login(connection_name: str, hugr_url: str, callback_base_url: str) -> str:
+def start_login(connection_name: str, hugr_url: str, callback_base_url: str, tls_skip_verify: bool = False) -> str:
     """Start OIDC login flow. Returns the authorization URL to open in browser.
 
     Args:
@@ -222,7 +225,7 @@ def start_login(connection_name: str, hugr_url: str, callback_base_url: str) -> 
             break
 
     # Discover OIDC config from Hugr server
-    auth_config = discover_auth_config(hugr_url)
+    auth_config = discover_auth_config(hugr_url, tls_skip_verify=tls_skip_verify)
     if not auth_config:
         raise ValueError("OIDC not configured on this Hugr server")
 
@@ -230,7 +233,7 @@ def start_login(connection_name: str, hugr_url: str, callback_base_url: str) -> 
     client_id = auth_config["client_id"]
 
     # Discover OIDC endpoints
-    oidc_config = _discover_oidc_endpoints(issuer)
+    oidc_config = _discover_oidc_endpoints(issuer, tls_skip_verify=tls_skip_verify)
     authorization_endpoint = oidc_config["authorization_endpoint"]
     token_endpoint = oidc_config["token_endpoint"]
 
@@ -251,6 +254,7 @@ def start_login(connection_name: str, hugr_url: str, callback_base_url: str) -> 
         client_id=client_id,
         redirect_uri=redirect_uri,
         issuer=issuer,
+        tls_skip_verify=tls_skip_verify,
     )
 
     # Build authorization URL
@@ -289,7 +293,7 @@ def exchange_code(state: str, code: str) -> LoginSession:
         raise ValueError("Login flow expired")
 
     # Exchange code for tokens
-    with httpx.Client(timeout=10) as client:
+    with httpx.Client(timeout=10, verify=not pending.tls_skip_verify) as client:
         resp = client.post(pending.token_endpoint, data={
             "grant_type": "authorization_code",
             "code": code,
@@ -328,6 +332,7 @@ def exchange_code(state: str, code: str) -> LoginSession:
         token_endpoint=pending.token_endpoint,
         client_id=pending.client_id,
         issuer=pending.issuer,
+        tls_skip_verify=pending.tls_skip_verify,
     )
     _sessions[pending.connection_name] = session
 
@@ -468,6 +473,7 @@ def restore_sessions_on_startup() -> list[dict]:
             token_endpoint=token_endpoint,
             client_id=client_id,
             issuer=issuer,
+            tls_skip_verify=conn.get("tls_skip_verify", False),
         )
         _sessions[conn["name"]] = session
         log.info("Restored session for %r (no refresh, expires at %d)",

@@ -24,6 +24,7 @@ export interface ConnectionEntry {
   url: string;
   auth_type?: string;
   auth_credential?: string;
+  tls_skip_verify?: boolean;
   tokens?: { access_token: string; expires_at: number };
   [key: string]: unknown; // preserve extra fields (created_at, etc.)
 }
@@ -81,6 +82,8 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
     const conn = this._connections.find(c => c.name === name);
     if (!conn) return null;
 
+    const tlsSkipVerify = conn.tls_skip_verify ?? false;
+
     if (conn.auth_type === 'browser') {
       // For browser auth, read token from OIDC session or connections.json
       const tokenData = oidc.getToken(name);
@@ -89,6 +92,7 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
           url: conn.url,
           authType: 'bearer',
           token: tokenData.access_token,
+          tlsSkipVerify,
         });
       }
       // Fallback: read from connections.json tokens field
@@ -97,10 +101,11 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
           url: conn.url,
           authType: 'bearer',
           token: conn.tokens.access_token,
+          tlsSkipVerify,
         });
       }
       // Not authenticated — return public client (queries will fail with auth error)
-      return new HugrClient({ url: conn.url, authType: 'public' });
+      return new HugrClient({ url: conn.url, authType: 'public', tlsSkipVerify });
     }
 
     return new HugrClient({
@@ -108,6 +113,7 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
       authType: (conn.auth_type as any) ?? 'public',
       apiKey: conn.auth_type === 'api_key' ? (conn.auth_credential as string) : undefined,
       token: conn.auth_type === 'bearer' ? (conn.auth_credential as string) : undefined,
+      tlsSkipVerify,
     });
   }
 
@@ -203,6 +209,20 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
       auth_type: selectedAuth.value,
     };
 
+    // Ask about TLS skip verify if URL is HTTPS
+    if (url.trim().startsWith('https://')) {
+      const tlsPick = await vscode.window.showQuickPick(
+        [
+          { label: 'Verify certificates', value: false, description: 'Default — verify TLS certificates' },
+          { label: 'Skip verification', value: true, description: 'For self-signed certificates' },
+        ],
+        { placeHolder: 'TLS certificate verification' },
+      );
+      if (tlsPick?.value) {
+        entry.tls_skip_verify = true;
+      }
+    }
+
     // Ask for credential if needed
     if (selectedAuth.value === 'api_key') {
       const key = await vscode.window.showInputBox({
@@ -231,7 +251,7 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
     // For browser connections, start login flow
     if (selectedAuth.value === 'browser') {
       try {
-        await oidc.startLogin(entry.name, entry.url, this._secrets, () => this._fireTreeChange());
+        await oidc.startLogin(entry.name, entry.url, this._secrets, () => this._fireTreeChange(), entry.tls_skip_verify);
         vscode.window.showInformationMessage(`${entry.name}: logged in`);
         this._load();
       } catch (e: any) {
@@ -255,6 +275,21 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
     const conn = this._connections.find(c => c.name === entry.name);
     if (conn) {
       conn.url = url.trim();
+
+      // Ask about TLS skip verify if URL is HTTPS
+      if (url.trim().startsWith('https://')) {
+        const tlsPick = await vscode.window.showQuickPick(
+          [
+            { label: 'Verify certificates', value: false, description: 'Default — verify TLS certificates' },
+            { label: 'Skip verification', value: true, description: 'For self-signed certificates' },
+          ],
+          { placeHolder: `TLS verification (currently: ${conn.tls_skip_verify ? 'skipped' : 'verified'})` },
+        );
+        if (tlsPick !== undefined) {
+          conn.tls_skip_verify = tlsPick.value || undefined;
+        }
+      }
+
       this._save();
     }
   }
@@ -312,7 +347,7 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
             }
           }
 
-          const raw = await httpPost(entry.url, body, headers);
+          const raw = await httpPost(entry.url, body, headers, entry.tls_skip_verify);
           const version = parseIpcVersion(raw);
           if (version) {
             vscode.window.showInformationMessage(`${entry.name}: Hugr v${version}`);
@@ -336,7 +371,7 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
       await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: `Logging in to ${entry.name}...`, cancellable: false },
         async () => {
-          await oidc.startLogin(entry.name, entry.url, this._secrets, () => this._fireTreeChange());
+          await oidc.startLogin(entry.name, entry.url, this._secrets, () => this._fireTreeChange(), entry.tls_skip_verify);
         },
       );
       vscode.window.showInformationMessage(`${entry.name}: logged in`);
@@ -432,7 +467,7 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
 /**
  * POST to the IPC endpoint and return raw multipart body.
  */
-function httpPost(url: string, body: string, extraHeaders?: Record<string, string>): Promise<string> {
+function httpPost(url: string, body: string, extraHeaders?: Record<string, string>, tlsSkipVerify = false): Promise<string> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const mod = parsed.protocol === 'https:' ? https : http;
@@ -445,6 +480,7 @@ function httpPost(url: string, body: string, extraHeaders?: Record<string, strin
       method: 'POST',
       headers,
       timeout: 5000,
+      rejectUnauthorized: !tlsSkipVerify,
     }, (res) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
