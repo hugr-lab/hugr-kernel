@@ -82,7 +82,7 @@ def _ensure_managed_connection(name: str, hugr_base_url: str, auth_type: str = "
     log.info("Created managed connection %r → %s (auth_type=%s)", name, ipc_url, auth_type)
 
 
-def _detect_hugr_auth_type(hugr_base_url: str) -> str:
+def _detect_hugr_auth_type(hugr_base_url: str, tls_skip_verify: bool = False) -> str:
     """Check if Hugr has OIDC configured via GET /auth/config.
 
     Returns "browser" if OIDC is available (user can login via browser),
@@ -90,7 +90,7 @@ def _detect_hugr_auth_type(hugr_base_url: str) -> str:
     """
     try:
         import httpx
-        resp = httpx.get(f"{hugr_base_url}/auth/config", timeout=5)
+        resp = httpx.get(f"{hugr_base_url}/auth/config", timeout=5, verify=not tls_skip_verify)
         if resp.status_code == 200:
             data = resp.json()
             if data.get("issuer"):
@@ -118,7 +118,12 @@ def _initialize_hub_mode(server_app):
 
     connection_name = os.environ.get("HUGR_CONNECTION_NAME", "default")
     initial_token = os.environ.get("HUGR_INITIAL_ACCESS_TOKEN")
+    tls_skip_verify = os.environ.get("HUGR_TLS_SKIP_VERIFY", "false").lower() == "true"
     has_jupyterhub = bool(os.environ.get("JUPYTERHUB_API_URL"))
+
+    extra = {}
+    if tls_skip_verify:
+        extra["tls_skip_verify"] = True
 
     if has_jupyterhub:
         # Running inside JupyterHub — use hub auth with token polling
@@ -126,6 +131,7 @@ def _initialize_hub_mode(server_app):
             name=connection_name,
             hugr_base_url=hugr_url,
             auth_type="hub",
+            extra_fields=extra,
         )
 
         from .hub_token_provider import HubTokenProvider
@@ -133,17 +139,19 @@ def _initialize_hub_mode(server_app):
         provider = HubTokenProvider(
             connection_name=connection_name,
             initial_access_token=initial_token,
+            tls_skip_verify=tls_skip_verify,
         )
         provider.start()
-        log.info("Hub mode: OIDC token refresh via JupyterHub API")
+        log.info("Hub mode: OIDC token refresh via JupyterHub API (tls_skip_verify=%s)", tls_skip_verify)
 
     else:
         # No JupyterHub — check if Hugr has OIDC configured
-        auth_type = _detect_hugr_auth_type(hugr_url)
+        auth_type = _detect_hugr_auth_type(hugr_url, tls_skip_verify=tls_skip_verify)
         _ensure_managed_connection(
             name=connection_name,
             hugr_base_url=hugr_url,
             auth_type=auth_type,
+            extra_fields=extra,
         )
         log.info("Hub mode: %s auth (no JupyterHub)", auth_type)
 
