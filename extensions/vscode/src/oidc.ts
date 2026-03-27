@@ -47,6 +47,7 @@ class LoginSession {
   private _refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private _secrets: vscode.SecretStorage;
   private _onSessionChange: () => void;
+  tlsSkipVerify: boolean;
 
   constructor(
     connectionName: string,
@@ -58,6 +59,7 @@ class LoginSession {
     issuer: string,
     secrets: vscode.SecretStorage,
     onSessionChange: () => void,
+    tlsSkipVerify = false,
   ) {
     this.connectionName = connectionName;
     this.refreshToken = refreshToken;
@@ -67,6 +69,7 @@ class LoginSession {
     this.clientId = clientId;
     this.issuer = issuer;
     this._secrets = secrets;
+    this.tlsSkipVerify = tlsSkipVerify;
     this._onSessionChange = onSessionChange;
   }
 
@@ -92,7 +95,7 @@ class LoginSession {
         grant_type: 'refresh_token',
         refresh_token: this.refreshToken,
         client_id: this.clientId,
-      });
+      }, 10000, this.tlsSkipVerify);
 
       this.accessToken = tokens.access_token;
       this.expiresAt = Date.now() / 1000 + (tokens.expires_in ?? 300);
@@ -181,11 +184,11 @@ function clearTokensFromConfig(connectionName: string): void {
 
 // ── HTTP helpers ──
 
-function httpGet(targetUrl: string, timeout = 5000): Promise<string> {
+function httpGet(targetUrl: string, timeout = 5000, tlsSkipVerify = false): Promise<string> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(targetUrl);
     const mod = parsed.protocol === 'https:' ? https : http;
-    const req = mod.get(parsed, { timeout }, (res) => {
+    const req = mod.get(parsed, { timeout, rejectUnauthorized: !tlsSkipVerify }, (res) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
@@ -201,7 +204,7 @@ function httpGet(targetUrl: string, timeout = 5000): Promise<string> {
   });
 }
 
-function postForm(targetUrl: string, params: Record<string, string>, timeout = 10000): Promise<TokenResponse> {
+function postForm(targetUrl: string, params: Record<string, string>, timeout = 10000, tlsSkipVerify = false): Promise<TokenResponse> {
   return new Promise((resolve, reject) => {
     const body = new URLSearchParams(params).toString();
     const parsed = new URL(targetUrl);
@@ -213,6 +216,7 @@ function postForm(targetUrl: string, params: Record<string, string>, timeout = 1
         'Content-Length': String(Buffer.byteLength(body)),
       },
       timeout,
+      rejectUnauthorized: !tlsSkipVerify,
     }, (res) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
@@ -248,14 +252,14 @@ function generatePkce(): { verifier: string; challenge: string } {
 
 // ── Discovery ──
 
-export async function discoverAuthConfig(hugrUrl: string): Promise<OidcConfig | null> {
+export async function discoverAuthConfig(hugrUrl: string, tlsSkipVerify = false): Promise<OidcConfig | null> {
   let base = hugrUrl.replace(/\/+$/, '');
   // Strip /ipc or /graphql suffix to get server base
   if (base.endsWith('/ipc')) base = base.slice(0, -4);
   if (base.endsWith('/graphql')) base = base.slice(0, -8);
 
   try {
-    const data = JSON.parse(await httpGet(`${base}/auth/config`));
+    const data = JSON.parse(await httpGet(`${base}/auth/config`, 5000, tlsSkipVerify));
     if (data.issuer) {
       return { issuer: data.issuer, client_id: data.client_id };
     }
@@ -265,9 +269,9 @@ export async function discoverAuthConfig(hugrUrl: string): Promise<OidcConfig | 
   }
 }
 
-async function discoverOidcEndpoints(issuer: string): Promise<OidcEndpoints> {
+async function discoverOidcEndpoints(issuer: string, tlsSkipVerify = false): Promise<OidcEndpoints> {
   const data = JSON.parse(
-    await httpGet(`${issuer.replace(/\/+$/, '')}/.well-known/openid-configuration`),
+    await httpGet(`${issuer.replace(/\/+$/, '')}/.well-known/openid-configuration`, 5000, tlsSkipVerify),
   );
   return {
     authorization_endpoint: data.authorization_endpoint,
@@ -283,15 +287,16 @@ export async function startLogin(
   hugrUrl: string,
   secrets: vscode.SecretStorage,
   onSessionChange: () => void,
+  tlsSkipVerify = false,
 ): Promise<void> {
   // Discover OIDC config from Hugr server
-  const authConfig = await discoverAuthConfig(hugrUrl);
+  const authConfig = await discoverAuthConfig(hugrUrl, tlsSkipVerify);
   if (!authConfig) {
     throw new Error('OIDC not configured on this Hugr server');
   }
 
   const { issuer, client_id } = authConfig;
-  const oidcEndpoints = await discoverOidcEndpoints(issuer);
+  const oidcEndpoints = await discoverOidcEndpoints(issuer, tlsSkipVerify);
   const { verifier, challenge } = generatePkce();
   const state = crypto.randomBytes(24).toString('base64url');
 
@@ -386,7 +391,7 @@ export async function startLogin(
     redirect_uri: redirectUri,
     client_id,
     code_verifier: verifier,
-  });
+  }, 10000, tlsSkipVerify);
 
   const accessToken = tokens.access_token;
   const expiresAt = Date.now() / 1000 + (tokens.expires_in ?? 300);
@@ -421,6 +426,7 @@ export async function startLogin(
     issuer,
     secrets,
     onSessionChange,
+    tlsSkipVerify,
   );
   _sessions.set(connectionName, session);
 
@@ -535,6 +541,7 @@ export async function restoreSessionsOnStartup(
       issuer,
       secrets,
       onSessionChange,
+      conn.tls_skip_verify === true,
     );
     _sessions.set(conn.name, session);
     if (refreshToken && tokenEndpoint) {

@@ -283,6 +283,12 @@ export class ConnectionManagerWidget extends Widget {
             <label>Header Name</label>
             <input type="text" data-field="api_key_header" placeholder="X-Api-Key" />
           </div>
+          <div style="margin-top:8px;">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:var(--jp-ui-font-size1);color:var(--jp-ui-font-color1);">
+              <input type="checkbox" data-field="tls_skip_verify" style="width:auto;margin:0;" />
+              Skip TLS verification (self-signed certs)
+            </label>
+          </div>
           <div class="hugr-dlg-result"></div>
         </div>
         <div class="hugr-dlg-footer">
@@ -350,6 +356,7 @@ export class ConnectionManagerWidget extends Widget {
       credential: credInput?.value || '',
       role: (overlay.querySelector('[data-field="role"]') as HTMLInputElement)?.value || '',
       api_key_header: (overlay.querySelector('[data-field="api_key_header"]') as HTMLInputElement)?.value || '',
+      tls_skip_verify: (overlay.querySelector('[data-field="tls_skip_verify"]') as HTMLInputElement)?.checked || false,
     });
 
     /** Save connection to server (create or update). */
@@ -361,6 +368,7 @@ export class ConnectionManagerWidget extends Widget {
       }
       if (vals.auth_type === 'bearer') body.token = vals.credential;
       if (vals.role) body.role = vals.role;
+      if (vals.tls_skip_verify) body.tls_skip_verify = true;
       let resp = await hugrFetch(`${BASE_URL}/connections`, makeRequest('POST', body));
       if (resp.status === 409) {
         resp = await hugrFetch(`${BASE_URL}/connections/${vals.name}`, makeRequest('PUT', body));
@@ -412,7 +420,7 @@ export class ConnectionManagerWidget extends Widget {
       if (vals.auth_type === 'browser') {
         // Browser: server-side test — POST /hugr/test starts OIDC login, callback runs test query
         try {
-          const resp = await hugrFetch(`${BASE_URL}/test`, makeRequest('POST', { url: vals.url, auth_type: 'browser' }));
+          const resp = await hugrFetch(`${BASE_URL}/test`, makeRequest('POST', { url: vals.url, auth_type: 'browser', tls_skip_verify: vals.tls_skip_verify }));
           const data = await resp.json();
           if (!resp.ok) {
             showMsg(`<span class="hugr-cm-err">${escapeHtml(data.error || 'Test failed')}</span>`);
@@ -455,22 +463,22 @@ export class ConnectionManagerWidget extends Widget {
         return;
       }
 
-      // Non-browser: direct test (no save)
+      // Always test via server endpoint — handles TLS and auth server-side
       try {
-        const client = new HugrClient({
+        const resp = await hugrFetch(`${BASE_URL}/test`, makeRequest('POST', {
           url: vals.url,
-          authType: vals.auth_type as 'public' | 'api_key' | 'bearer',
-          apiKey: vals.auth_type === 'api_key' ? vals.credential : undefined,
-          apiKeyHeader: vals.auth_type === 'api_key' && vals.api_key_header ? vals.api_key_header : undefined,
+          auth_type: vals.auth_type,
+          api_key: vals.auth_type === 'api_key' ? vals.credential : undefined,
+          api_key_header: vals.auth_type === 'api_key' && vals.api_key_header ? vals.api_key_header : undefined,
           token: vals.auth_type === 'bearer' ? vals.credential : undefined,
           role: vals.role || undefined,
-        });
-        const response = await client.query('{ function { core { info { version } } } }');
-        if (response.errors.length > 0) {
-          showMsg(`<span class="hugr-cm-err">${escapeHtml(response.errors[0].message)}</span>`);
+          tls_skip_verify: vals.tls_skip_verify,
+        }));
+        const data = await resp.json();
+        if (data.ok) {
+          showMsg(`<span class="hugr-cm-ok">v${escapeHtml(String(data.version || 'unknown'))}</span>`);
         } else {
-          const version = response.data?.function?.core?.info?.version ?? 'unknown';
-          showMsg(`<span class="hugr-cm-ok">v${escapeHtml(String(version))}</span>`);
+          showMsg(`<span class="hugr-cm-err">${escapeHtml(data.error || 'Test failed')}</span>`);
         }
       } catch {
         showMsg('<span class="hugr-cm-err">Connection failed</span>');

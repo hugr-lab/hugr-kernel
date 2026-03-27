@@ -183,13 +183,14 @@ func loadConnectionsFromFile(cm *connection.Manager) {
 	var cfg struct {
 		Default     string `json:"default"`
 		Connections []struct {
-			Name      string `json:"name"`
-			URL       string `json:"url"`
-			AuthType  string `json:"auth_type"`
-			Managed   bool   `json:"managed"`
-			APIKey       string `json:"api_key"`
-			APIKeyHeader string `json:"api_key_header"`
-			Token        string `json:"token"`
+			Name           string `json:"name"`
+			URL            string `json:"url"`
+			AuthType       string `json:"auth_type"`
+			Managed        bool   `json:"managed"`
+			TLSSkipVerify  bool   `json:"tls_skip_verify"`
+			APIKey         string `json:"api_key"`
+			APIKeyHeader   string `json:"api_key_header"`
+			Token          string `json:"token"`
 			Tokens    *struct {
 				AccessToken string `json:"access_token"`
 				ExpiresAt   int64  `json:"expires_at"`
@@ -211,6 +212,7 @@ func loadConnectionsFromFile(cm *connection.Manager) {
 					continue
 				}
 				conn.Managed = c.Managed
+				conn.TLSSkipVerify = c.TLSSkipVerify
 
 				switch c.AuthType {
 				case "browser", "hub":
@@ -239,6 +241,9 @@ func loadConnectionsFromFile(cm *connection.Manager) {
 						conn.SetBearerToken(c.Token)
 					}
 				}
+				// Ensure client is (re)created with TLS settings applied.
+				// Some auth paths (SetAuthMode, public) don't call recreateClient().
+				conn.Recreate()
 			}
 		}
 	}
