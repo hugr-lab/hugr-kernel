@@ -220,6 +220,17 @@ func (h *Handler) walkData(prefix string, data map[string]any, queryID string, p
 			h.walkData(path, v, queryID, partIndex, parts, textParts)
 
 		default:
+			if val == nil {
+				// Null value — emit JSON null part (not arrow)
+				*parts = append(*parts, PartDef{
+					ID:    path,
+					Type:  "json",
+					Title: title,
+					Data:  "null",
+				})
+				*textParts = append(*textParts, fmt.Sprintf("[%s]\nnull", title))
+				continue
+			}
 			// Other scalar/JSON values
 			*parts = append(*parts, PartDef{
 				ID:    path,
