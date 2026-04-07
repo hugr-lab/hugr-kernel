@@ -6,9 +6,9 @@ require (
 	github.com/apache/arrow-go/v18 v18.5.2
 	github.com/go-zeromq/zmq4 v0.17.0
 	github.com/google/uuid v1.6.0
-	github.com/hugr-lab/duckdb-kernel v0.3.4
-	github.com/hugr-lab/query-engine/client v0.3.11
-	github.com/hugr-lab/query-engine/types v0.3.11
+	github.com/hugr-lab/duckdb-kernel v0.3.5
+	github.com/hugr-lab/query-engine/client v0.3.18
+	github.com/hugr-lab/query-engine/types v0.3.18
 	github.com/vektah/gqlparser/v2 v2.5.32
 	golang.org/x/sync v0.20.0
 )
