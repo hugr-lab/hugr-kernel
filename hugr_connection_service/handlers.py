@@ -73,19 +73,20 @@ _proxy_name: str | None = None
 _proxy_conn: dict | None = None
 
 def _parse_duration(v: str, default: float = 300) -> float:
-    """Parse Go duration format subset ('500ms', '5m', '300s', '1h'). Returns seconds."""
-    try:
-        if v.endswith("ms"):
-            return float(v[:-2]) / 1000
-        if v.endswith("h"):
-            return float(v[:-1]) * 3600
-        if v.endswith("m"):
-            return float(v[:-1]) * 60
-        if v.endswith("s"):
-            return float(v[:-1])
-        return float(v)
-    except (ValueError, IndexError):
-        return default
+    """Parse Go duration format (e.g. '1h30m', '3m50s', '500ms'). Returns seconds."""
+    import re
+    units = {"h": 3600, "m": 60, "s": 1, "ms": 0.001}
+    total = 0.0
+    matched = False
+    for m in re.finditer(r"(\d+(?:\.\d+)?)(ms|[hms])", v):
+        total += float(m.group(1)) * units[m.group(2)]
+        matched = True
+    if not matched:
+        try:
+            return float(v)
+        except ValueError:
+            return default
+    return total
 
 _query_timeout: float = _parse_duration(os.environ.get("HUGR_QUERY_TIMEOUT", "5m"))
 
