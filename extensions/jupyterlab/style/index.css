@@ -533,12 +533,15 @@
 
 /* Connection selector bar */
 .hugr-explorer-conn-bar {
+  display: flex;
+  align-items: center;
   padding: 8px 12px;
   border-bottom: 1px solid var(--jp-border-color2);
 }
 
 .hugr-explorer-conn-select {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   padding: 4px 8px;
   border: 1px solid var(--jp-border-color1);
   border-radius: 3px;

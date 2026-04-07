@@ -72,6 +72,21 @@ def _test_connection(url: str, auth_type: str = "public", **kwargs) -> dict:
 _proxy_name: str | None = None
 _proxy_conn: dict | None = None
 
+def _parse_duration(v: str, default: float = 300) -> float:
+    """Parse Go duration format subset ('5m', '300s', '1h'). Returns seconds."""
+    try:
+        if v.endswith("h"):
+            return float(v[:-1]) * 3600
+        if v.endswith("m"):
+            return float(v[:-1]) * 60
+        if v.endswith("s"):
+            return float(v[:-1])
+        return float(v)
+    except (ValueError, IndexError):
+        return default
+
+_query_timeout: float = _parse_duration(os.environ.get("HUGR_QUERY_TIMEOUT", "5m"))
+
 
 class ProxyHandler(JupyterHandler):
     """POST /hugr/proxy/<connection_name> — proxy request to Hugr server."""
@@ -133,7 +148,7 @@ class ProxyHandler(JupyterHandler):
                 method="POST",
                 headers=headers,
                 body=self.request.body,
-                request_timeout=30,
+                request_timeout=_query_timeout,
                 validate_cert=not tls_skip,
             )
         except tornado.httpclient.HTTPClientError as e:
@@ -204,6 +219,7 @@ class ConnectionsHandler(APIHandler):
                     entry["expires_at"] = auth_status["expires_at"]
                 if c.get("oidc"):
                     entry["was_authenticated"] = True
+            entry["query_timeout"] = _query_timeout
             result.append(entry)
         self.finish(json.dumps(result))
 
