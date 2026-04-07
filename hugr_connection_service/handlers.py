@@ -73,8 +73,10 @@ _proxy_name: str | None = None
 _proxy_conn: dict | None = None
 
 def _parse_duration(v: str, default: float = 300) -> float:
-    """Parse Go duration format subset ('5m', '300s', '1h'). Returns seconds."""
+    """Parse Go duration format subset ('500ms', '5m', '300s', '1h'). Returns seconds."""
     try:
+        if v.endswith("ms"):
+            return float(v[:-2]) / 1000
         if v.endswith("h"):
             return float(v[:-1]) * 3600
         if v.endswith("m"):
