@@ -176,6 +176,32 @@ export class HugrExplorerWidget extends Widget {
       this._onConnectionChange(select.value);
     });
     connBar.appendChild(select);
+
+    // Refresh button — reloads all sections for the current connection
+    const refreshBtn = document.createElement('span');
+    refreshBtn.className = 'hugr-explorer-conn-refresh';
+    refreshBtn.style.cssText =
+      'display:inline-flex;align-items:center;justify-content:center;' +
+      'width:22px;height:22px;flex-shrink:0;cursor:pointer;' +
+      'border-radius:3px;font-size:14px;opacity:0.6;margin-left:4px;' +
+      'color:var(--jp-ui-font-color1, #333);';
+    refreshBtn.textContent = '\u21BB';
+    refreshBtn.title = 'Refresh all sections';
+    refreshBtn.addEventListener('mouseenter', () => {
+      refreshBtn.style.opacity = '1';
+      refreshBtn.style.backgroundColor = 'var(--jp-layout-color3, #ddd)';
+    });
+    refreshBtn.addEventListener('mouseleave', () => {
+      refreshBtn.style.opacity = '0.6';
+      refreshBtn.style.backgroundColor = '';
+    });
+    refreshBtn.addEventListener('click', () => {
+      if (this._selectedConnection) {
+        this._onConnectionChange(this._selectedConnection);
+      }
+    });
+    connBar.appendChild(refreshBtn);
+
     container.appendChild(connBar);
 
     // Tab buttons
@@ -238,12 +264,6 @@ export class HugrExplorerWidget extends Widget {
     if (this._client) {
       this._client.abort();
     }
-
-    // Find connection config to get URL and auth
-    const conn = this._connections.find((c: any) => {
-      const n = typeof c === 'string' ? c : c.name ?? String(c);
-      return n === name;
-    });
 
     // Always use proxy — handles auth and TLS (self-signed certs) server-side
     const proxyUrl = `${PageConfig.getBaseUrl()}hugr/proxy/${encodeURIComponent(name)}`;

@@ -698,6 +698,10 @@ export class SchemaTreeSection {
     if (node.kind === 'enum_value') {
       return true;
     }
+    // Root nodes are never leaves — keep refresh button visible even on error
+    if (node.kind === 'root') {
+      return false;
+    }
     // Field nodes that still need to load return type fields are not leaves
     if (node.kind === 'field' && node._returnTypeLoaded === false) {
       return false;

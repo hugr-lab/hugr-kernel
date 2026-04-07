@@ -76,6 +76,8 @@ internal/renderer/table.go       # ASCII table fallback
 - `~/.hugr/connections.json` (existing file, extended with `tokens` field) (008-oidc-browser-login)
 - Go 1.26.1 (kernel), TypeScript 5.8 (extensions), Python 3.11 (server extension) + GitHub Actions, hatchling + hatch-jupyter-builder (PyPI), @vscode/vsce (Marketplace) (009-publish-distribution)
 - N/A (CI/CD pipeline, no data storage) (009-publish-distribution)
+- Go 1.26.1 (kernel), Python 3.11 (connection service, hugr-client), TypeScript 5.x (JupyterLab + VS Code extensions) + `net/http` (Go), `requests` + `websockets` (Python hugr-client), `httpx` (Python OIDC/hub), `tornado` (Python proxy), Node.js `https` (VS Code) (010-tls-skip-verify)
+- `~/.hugr/connections.json` (shared config file) (010-tls-skip-verify)
 
 ## Recent Changes
 - 006-hugr-explorer: Added TypeScript 5.x (JupyterLab extension), Python 3.11 (server extension), Go 1.26.1 (kernel — minimal changes) + `@jupyterlab/application`, `@lumino/widgets`, webpack 5, tornado (server proxy)

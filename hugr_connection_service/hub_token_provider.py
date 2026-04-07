@@ -18,6 +18,14 @@ from tornado.ioloop import IOLoop
 
 log = logging.getLogger("hugr_connection_service.hub_token_provider")
 
+# In-memory token store: connection_name → {"access_token": str, "expires_at": int}
+_hub_tokens: dict[str, dict] = {}
+
+
+def get_hub_token(connection_name: str) -> dict | None:
+    """Get current hub token from in-memory store. Used by ProxyHandler."""
+    return _hub_tokens.get(connection_name)
+
 
 def _config_path() -> Path:
     env = os.environ.get("HUGR_CONFIG_PATH")
@@ -195,15 +203,20 @@ class HubTokenProvider:
             self._backoff_delay = min(self._backoff_delay * 2, 60)
 
     def _write_token(self, access_token: str):
-        """Write access_token + expires_at to the managed connection in connections.json."""
+        """Write access_token + expires_at to in-memory store and connections.json."""
         exp = _decode_jwt_exp(access_token)
+        token_data = {
+            "access_token": access_token,
+            "expires_at": int(exp) if exp else 0,
+        }
 
+        # Update in-memory store (used by ProxyHandler)
+        _hub_tokens[self.connection_name] = token_data
+
+        # Persist to disk (for kernel and restart recovery)
         cfg = _load_config()
         for conn in cfg.get("connections", []):
             if conn.get("name") == self.connection_name and conn.get("managed"):
-                conn["tokens"] = {
-                    "access_token": access_token,
-                    "expires_at": int(exp) if exp else 0,
-                }
+                conn["tokens"] = token_data
                 break
         _save_config(cfg)

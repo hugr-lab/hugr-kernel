@@ -113,7 +113,9 @@ class ProxyHandler(JupyterHandler):
             elif conn.get("tokens", {}).get("access_token"):
                 headers["Authorization"] = f"Bearer {conn['tokens']['access_token']}"
         elif auth_type == "hub":
-            token = conn.get("tokens", {}).get("access_token")
+            from .hub_token_provider import get_hub_token
+            hub_token_data = get_hub_token(connection_name)
+            token = hub_token_data["access_token"] if hub_token_data else conn.get("tokens", {}).get("access_token")
             if token:
                 headers["Authorization"] = f"Bearer {token}"
             else:
@@ -588,15 +590,16 @@ class ConnectionTokenHandler(APIHandler):
 
         auth_type = conn.get("auth_type", "public")
 
-        # Hub auth: token from connections.json (refreshed by hub_token_provider)
+        # Hub auth: token from in-memory store (refreshed by hub_token_provider)
         if auth_type == "hub":
-            tokens = conn.get("tokens") or {}
-            token = tokens.get("access_token")
-            if token:
-                self.finish(json.dumps({
-                    "access_token": token,
-                    "expires_at": tokens.get("expires_at", 0),
-                }))
+            from .hub_token_provider import get_hub_token
+            hub_token_data = get_hub_token(name)
+            if not hub_token_data:
+                # Fallback to connections.json
+                tokens = conn.get("tokens") or {}
+                hub_token_data = {"access_token": tokens.get("access_token"), "expires_at": tokens.get("expires_at", 0)}
+            if hub_token_data and hub_token_data.get("access_token"):
+                self.finish(json.dumps(hub_token_data))
             else:
                 self.set_status(404)
                 self.finish(json.dumps({"error": "hub token not yet available"}))
