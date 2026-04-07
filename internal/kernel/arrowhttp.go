@@ -391,17 +391,21 @@ func (as *ArrowServer) streamRawFile(w http.ResponseWriter, path string) {
 // detectNativeGeoColumns finds columns with native GeoArrow extension types
 // (geoarrow.multipoint, geoarrow.multilinestring, geoarrow.multipolygon, etc.)
 // in a schema. Returns their indices.
+// Checks both field metadata and registered Arrow extension types.
 func detectNativeGeoColumns(schema *arrow.Schema) []int {
 	var indices []int
 	for i, f := range schema.Fields() {
-		if f.Metadata.Len() == 0 {
-			continue
+		ext := ""
+		if f.Metadata.Len() > 0 {
+			if idx := f.Metadata.FindKey("ARROW:extension:name"); idx >= 0 {
+				ext = f.Metadata.Values()[idx]
+			}
 		}
-		idx := f.Metadata.FindKey("ARROW:extension:name")
-		if idx < 0 {
-			continue
+		if ext == "" {
+			if et, ok := f.Type.(arrow.ExtensionType); ok {
+				ext = et.ExtensionName()
+			}
 		}
-		ext := f.Metadata.Values()[idx]
 		if strings.HasPrefix(ext, "geoarrow.") || strings.HasPrefix(ext, "ogc.") {
 			indices = append(indices, i)
 		}

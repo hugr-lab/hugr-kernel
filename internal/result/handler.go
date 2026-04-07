@@ -352,17 +352,26 @@ func (h *Handler) handleArrowPart(path, title, partID string, table types.ArrowT
 }
 
 // detectAllGeometryColumns finds all geometry columns: native GeoArrow + hugr-specific.
+// Checks both field metadata and registered Arrow extension types.
 func detectAllGeometryColumns(schema *arrow.Schema) []GeometryColumnMeta {
 	var cols []GeometryColumnMeta
 	for _, f := range schema.Fields() {
-		if f.Metadata.Len() == 0 {
+		// Try field metadata first
+		ext := ""
+		if f.Metadata.Len() > 0 {
+			if idx := f.Metadata.FindKey("ARROW:extension:name"); idx >= 0 {
+				ext = f.Metadata.Values()[idx]
+			}
+		}
+		// Fallback: check registered Arrow extension type
+		if ext == "" {
+			if et, ok := f.Type.(arrow.ExtensionType); ok {
+				ext = et.ExtensionName()
+			}
+		}
+		if ext == "" {
 			continue
 		}
-		idx := f.Metadata.FindKey("ARROW:extension:name")
-		if idx < 0 {
-			continue
-		}
-		ext := f.Metadata.Values()[idx]
 
 		var format string
 		switch ext {
@@ -391,6 +400,17 @@ func detectAllGeometryColumns(schema *arrow.Schema) []GeometryColumnMeta {
 			}
 			if err := json.Unmarshal([]byte(f.Metadata.Values()[mi]), &m); err == nil && m.SRID != 0 {
 				srid = m.SRID
+			}
+		}
+		// Also try extension type metadata for SRID
+		if srid == 4326 {
+			if et, ok := f.Type.(arrow.ExtensionType); ok {
+				var m struct {
+					SRID int `json:"srid"`
+				}
+				if err := json.Unmarshal([]byte(et.Serialize()), &m); err == nil && m.SRID != 0 {
+					srid = m.SRID
+				}
 			}
 		}
 
