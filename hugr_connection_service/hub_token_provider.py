@@ -1,7 +1,20 @@
-"""Hub Token Provider — refreshes access_token by polling JupyterHub API.
+"""Hub Token Provider — actively refreshes access_token via JupyterHub.
 
 No refresh_token is stored in the container. JupyterHub manages the OIDC
-refresh cycle; this provider fetches the latest access_token from the Hub API.
+refresh cycle; this provider periodically POSTs to a custom JH internal
+endpoint that drives Authenticator.refresh_user() server-side and returns
+the fresh access_token.
+
+Why a custom endpoint and not /hub/api/users/{name}?
+JupyterHub's auth_refresh_age background refresh fires lazily — only when
+a request with a *user-cookie* hits JH (e.g. JupyterLab UI heartbeat). The
+poller runs with a JUPYTERHUB_API_TOKEN (server scope), which doesn't
+trigger refresh_user. So if the user closes the browser tab the access_token
+dies and is never refreshed until the user comes back. The custom endpoint
+forces refresh_auth(user, force=True) on every poll, decoupling the refresh
+cycle from UI activity. Requires JupyterHub config to register
+RefreshUserHandler (see jupyterhub_config.py in the hub repo).
+
 Refresh scheduling is based on the JWT `exp` claim (30 seconds before expiry).
 """
 
@@ -78,13 +91,15 @@ def _decode_jwt_exp(token: str) -> float | None:
 
 
 class HubTokenProvider:
-    """Refreshes access_token by polling JupyterHub API.
+    """Refreshes access_token by POSTing to JH's refresh-user endpoint.
 
     Token refresh scheduling is based on the JWT exp claim:
     - Schedule next refresh at exp - 30 seconds
     - Minimum delay: 5 seconds
-    - On failure: exponential backoff (5s, 10s, 20s, 40s, max 60s)
-    - On same token (Hub hasn't refreshed yet): retry in 10s
+    - On HTTP failure: exponential backoff (5s, 10s, 20s, 40s, max 60s)
+    - On 410 Gone (refresh_token expired): write session-expired marker,
+      stop polling. The browser/UI will discover the dead session on its
+      next interaction with kernels.
     """
 
     def __init__(
@@ -152,35 +167,54 @@ class HubTokenProvider:
         )
 
     async def _do_refresh(self):
-        """Fetch fresh access_token from JupyterHub API."""
+        """Force a refresh in JH and pull the fresh access_token."""
         try:
             async with httpx.AsyncClient(verify=not self._tls_skip_verify) as client:
-                resp = await client.get(
-                    f"{self.hub_api_url}/users/{self.hub_user}",
+                resp = await client.post(
+                    f"{self.hub_api_url}/internal/refresh-user/{self.hub_user}",
                     headers={"Authorization": f"Bearer {self.hub_token}"},
                     timeout=10,
                 )
-                resp.raise_for_status()
 
-            auth_state = resp.json().get("auth_state") or {}
-            access_token = auth_state.get("access_token")
+            # 410 Gone — refresh_user said False, fresh login required.
+            # Stop polling, write a marker so other components / UI can react.
+            if resp.status_code == 410:
+                try:
+                    reason = resp.json().get("reason", "fresh_login_required")
+                except Exception:
+                    reason = "fresh_login_required"
+                log.warning(
+                    "Session expired for %r (reason=%s). Polling stopped.",
+                    self.connection_name,
+                    reason,
+                )
+                self._write_session_expired_marker(reason)
+                self.stop()
+                return
+
+            resp.raise_for_status()
+            payload = resp.json()
+            access_token = payload.get("access_token")
 
             if not access_token:
-                log.warning("Hub API returned no access_token in auth_state")
+                log.warning("refresh-user endpoint returned no access_token")
                 self._schedule(10)
                 return
 
-            # Same token — Hub hasn't refreshed yet, retry in 10s
+            # Same token — JH didn't actually rotate (e.g. existing token
+            # still valid). Reschedule based on its exp.
             if access_token == self._last_token:
-                self._schedule(10)
+                exp = _decode_jwt_exp(access_token) or (payload.get("expires_at") or 0)
+                delay = max(exp - time.time() - 30, 5) if exp else 30
+                self._schedule(delay)
                 return
 
-            # New token — write and reschedule
+            # New token — persist and reschedule based on its exp.
             self._write_token(access_token)
             self._last_token = access_token
             self._backoff_delay = 5  # reset backoff
 
-            exp = _decode_jwt_exp(access_token)
+            exp = _decode_jwt_exp(access_token) or (payload.get("expires_at") or 0)
             if exp:
                 delay = max(exp - time.time() - 30, 5)
             else:
@@ -201,6 +235,26 @@ class HubTokenProvider:
             )
             self._schedule(self._backoff_delay)
             self._backoff_delay = min(self._backoff_delay * 2, 60)
+
+    def _write_session_expired_marker(self, reason: str) -> None:
+        """Write a marker file indicating the JH session is dead.
+
+        Other components (Jupyter Server extensions, UI plugins) can watch
+        for this file to surface a "session expired, please re-login" message
+        to the user. Path is the connections.json directory + 'session-expired.flag'.
+        """
+        try:
+            marker = _config_path().parent / "session-expired.flag"
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(
+                json.dumps({
+                    "reason": reason,
+                    "at": int(time.time()),
+                    "connection": self.connection_name,
+                })
+            )
+        except Exception as e:
+            log.warning("Failed to write session-expired marker: %s", e)
 
     def _write_token(self, access_token: str):
         """Write access_token + expires_at to in-memory store and connections.json."""
