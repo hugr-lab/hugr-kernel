@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hugr-graphql-ide"
-version = "0.2.10"
+version = "0.2.11"
 description = "JupyterLab extension for Hugr GraphQL IDE — connections, schema explorer, completions, hover, and OIDC authentication"
 license = {text = "MIT"}
 requires-python = ">=3.11"
