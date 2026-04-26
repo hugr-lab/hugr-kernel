@@ -7,9 +7,9 @@ require (
 	github.com/go-zeromq/zmq4 v0.17.0
 	github.com/google/uuid v1.6.0
 	github.com/hugr-lab/duckdb-kernel v0.3.5
-	github.com/hugr-lab/query-engine/client v0.3.32
-	github.com/hugr-lab/query-engine/types v0.3.32
-	github.com/vektah/gqlparser/v2 v2.5.32
+	github.com/hugr-lab/query-engine/client v0.3.33
+	github.com/hugr-lab/query-engine/types v0.3.33
+	github.com/vektah/gqlparser/v2 v2.5.33
 	golang.org/x/sync v0.20.0
 )
 
