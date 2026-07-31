@@ -1,8 +1,22 @@
 /**
- * Types catalog search section (T012 + T013).
+ * Types catalog search section.
  *
- * Provides a searchable, paginated AG Grid table of GraphQL types from the
- * Hugr catalog with optional semantic (vector) search support.
+ * A searchable, paginated table of the GraphQL types the connected engine
+ * serves — the generated surface included, which is what makes it useful:
+ * filters, aggregations and mutation inputs are most of what a schema is made
+ * of, and they are exactly the names that turn up in an error message.
+ *
+ * The listing comes from standard introspection (`__schema.types`, with hugr's
+ * `hugr_type` / `module` / `catalog` extensions) and is cached per connection,
+ * then filtered and paged in the browser. It used to be a server-side query
+ * over `core.catalog.types`; that view was part of the compiled-schema storage
+ * and went with it — the schema is generated on read now, so there is no table
+ * of generated types left to page through.
+ *
+ * Semantic search went the same way. The vector index covers the LOGICAL model
+ * (modules, data objects, functions, fields), never the generated types, so
+ * ranking types by meaning is not something the engine can do. Searching the
+ * logical model by meaning is `_search`, and belongs in its own section.
  */
 import { HugrClient } from '../hugrClient';
 import { escapeHtml } from '../utils';
@@ -21,8 +35,6 @@ interface TypeResult {
   hugr_type?: string;
   module?: string;
   catalog?: string;
-  fields_aggregation?: { _rows_count: number };
-  _distance_to_query?: number;
 }
 
 export class TypesSearchSection {
@@ -33,12 +45,14 @@ export class TypesSearchSection {
   // State
   private _query = '';
   private _kindFilter = '';
-  private _semanticSearch = false;
   private _page = 0;
   private _totalCount = 0;
   private _results: TypeResult[] = [];
   private _loading = false;
-  private _semanticAvailable = true;
+  private _error: string | null = null;
+  // The connection's whole type list, fetched once. ~3k types on a large
+  // deployment: half a megabyte, and then every keystroke is local.
+  private _allTypes: TypeResult[] | null = null;
 
   // Debounce & race guard
   private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -47,7 +61,6 @@ export class TypesSearchSection {
   // Persistent DOM references
   private _searchInput: HTMLInputElement | null = null;
   private _kindSelect: HTMLSelectElement | null = null;
-  private _semanticCheck: HTMLInputElement | null = null;
   private _resultsContainer: HTMLElement | null = null;
   private _gridApi: GridApi | null = null;
 
@@ -64,12 +77,12 @@ export class TypesSearchSection {
     this._client = client;
     this._query = '';
     this._kindFilter = '';
-    this._semanticSearch = false;
     this._page = 0;
     this._totalCount = 0;
     this._results = [];
     this._loading = false;
-    this._semanticAvailable = true;
+    this._error = null;
+    this._allTypes = null;
     this._render();
     if (client) {
       this._search();
@@ -153,23 +166,8 @@ export class TypesSearchSection {
     });
     this._kindSelect = kindSelect;
 
-    const semanticLabel = document.createElement('label');
-    semanticLabel.className = 'hugr-types-semantic-toggle';
-    const semanticCheck = document.createElement('input');
-    semanticCheck.type = 'checkbox';
-    semanticCheck.checked = this._semanticSearch;
-    semanticCheck.addEventListener('change', () => {
-      this._semanticSearch = semanticCheck.checked;
-      this._page = 0;
-      this._search();
-    });
-    semanticLabel.appendChild(semanticCheck);
-    semanticLabel.appendChild(document.createTextNode(' Semantic'));
-    this._semanticCheck = semanticCheck;
-
     filters.appendChild(searchInput);
     filters.appendChild(kindSelect);
-    filters.appendChild(semanticLabel);
     wrapper.appendChild(filters);
 
     // --- Results container (updated independently) ---
@@ -209,6 +207,14 @@ export class TypesSearchSection {
       return;
     }
 
+    if (this._error) {
+      const status = document.createElement('div');
+      status.className = 'hugr-types-status';
+      status.textContent = this._error;
+      resultsContainer.appendChild(status);
+      return;
+    }
+
     if (this._results.length === 0) {
       const status = document.createElement('div');
       status.className = 'hugr-types-status';
@@ -227,7 +233,7 @@ export class TypesSearchSection {
         iconHtml,
         name: type.name || '',
         module: type.module || '',
-        fields: type.fields_aggregation?._rows_count ?? '',
+        catalog: type.catalog || '',
         description: type.description || '',
         _typeName: type.name,
       };
@@ -252,7 +258,11 @@ export class TypesSearchSection {
       },
       { field: 'name', headerName: 'Name', flex: 1, minWidth: 120, sortable: true },
       { field: 'module', headerName: 'Module', flex: 1, minWidth: 100, sortable: true },
-      { field: 'fields', headerName: 'Fields', width: 70, sortable: true },
+      // Was a field COUNT, from an aggregation over the compiled-schema view.
+      // Standard introspection carries no counts, and selecting every type's
+      // fields to count them client-side more than doubles the payload for a
+      // number; the source is the more useful column anyway.
+      { field: 'catalog', headerName: 'Source', width: 110, sortable: true },
       {
         field: 'description',
         headerName: 'Description',
@@ -305,8 +315,7 @@ export class TypesSearchSection {
       prevBtn.disabled = this._page === 0;
       prevBtn.addEventListener('click', () => {
         if (this._page > 0) {
-          this._page--;
-          this._search();
+          this._goToPage(this._page - 1);
         }
       });
 
@@ -316,8 +325,7 @@ export class TypesSearchSection {
       nextBtn.disabled = end >= this._totalCount;
       nextBtn.addEventListener('click', () => {
         if (end < this._totalCount) {
-          this._page++;
-          this._search();
+          this._goToPage(this._page + 1);
         }
       });
 
@@ -348,17 +356,18 @@ export class TypesSearchSection {
     }
 
     const version = ++this._searchVersion;
-    this._loading = true;
-    this._renderResults();
+    this._loading = this._allTypes === null;
+    if (this._loading) {
+      this._renderResults();
+    }
 
     try {
-      if (this._semanticSearch && this._semanticAvailable && this._query.trim()) {
-        await this._semanticSearchQuery();
-      } else {
-        await this._normalSearch();
-      }
+      await this._ensureTypes();
+      this._error = null;
+      this._applyFilter();
     } catch (err) {
       console.error('Types search error:', err);
+      this._error = err instanceof Error ? err.message : String(err);
       this._results = [];
       this._totalCount = 0;
     }
@@ -373,119 +382,88 @@ export class TypesSearchSection {
   }
 
   /**
-   * Build ilike pattern from user query:
-   * - If user typed `*`, replace `*` with `%` (user controls wildcards)
-   * - Otherwise append `%` for prefix match (e.g. "type" → "type%")
+   * Fetch the connection's type list once and keep it.
+   *
+   * Standard introspection has no filter, no ordering and no pagination, so
+   * the choice is one payload per connection or one per keystroke; the list
+   * only changes when a data source is loaded or unloaded, which is what
+   * reconnecting is for. Descriptions are included — they are what the
+   * description column and the tooltip show — and they are most of the size.
    */
-  private _buildIlikePattern(raw: string): string {
-    const escaped = raw.replace(/"/g, '\\"');
-    if (raw.includes('*')) {
-      return escaped.replace(/\*/g, '%');
-    }
-    return `${escaped}%`;
-  }
-
-  private async _normalSearch(): Promise<void> {
-    if (!this._client) {
+  private async _ensureTypes(): Promise<void> {
+    if (this._allTypes !== null || !this._client) {
       return;
     }
-
-    // Build filter object dynamically
-    const filterParts: string[] = [];
-    if (this._query.trim()) {
-      const pattern = this._buildIlikePattern(this._query.trim());
-      filterParts.push(`name: { ilike: "${pattern}" }`);
-    }
-    if (this._kindFilter) {
-      filterParts.push(`kind: { eq: "${this._kindFilter}" }`);
-    }
-
-    const filterClause = filterParts.length > 0
-      ? `filter: { ${filterParts.join(', ')} }`
-      : '';
-
-    const offset = this._page * PAGE_SIZE;
-
-    const query = `{
-  core {
-    catalog {
-      types(
-        ${filterClause}
-        order_by: [{field: "name", direction: ASC}]
-        limit: ${PAGE_SIZE}
-        offset: ${offset}
-      ) {
-        name kind description hugr_type module catalog
-        fields_aggregation { _rows_count }
-      }
-      types_aggregation(
-        ${filterClause}
-      ) {
-        _rows_count
-      }
-    }
+    const resp = await this._client.query(`{
+  __schema {
+    types { name kind description hugr_type module catalog }
   }
-}`;
-
-    const resp = await this._client.query(query);
-    this._results = resp.data?.core?.catalog?.types || [];
-    this._totalCount = resp.data?.core?.catalog?.types_aggregation?._rows_count ?? 0;
+}`);
+    if (resp.errors && resp.errors.length > 0) {
+      throw new Error(resp.errors.map((e: any) => e.message).join('; '));
+    }
+    const types: TypeResult[] = resp.data?.__schema?.types ?? [];
+    // Introspection's own types are not part of anyone's schema.
+    this._allTypes = types
+      .filter(t => t.name && !t.name.startsWith('__'))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  private async _semanticSearchQuery(): Promise<void> {
-    if (!this._client) {
+  /**
+   * Narrow the cached list and cut the requested page out of it.
+   *
+   * The matching rule is the one the server-side ilike used to implement, kept
+   * so muscle memory survives the move: bare text is a PREFIX match, and a `*`
+   * anywhere makes the whole pattern a wildcard match. Both are
+   * case-insensitive.
+   */
+  private _applyFilter(): void {
+    const all = this._allTypes ?? [];
+    const query = this._query.trim();
+    const matches = this._matcher(query);
+
+    const filtered = all.filter(t => {
+      if (this._kindFilter && t.kind !== this._kindFilter) {
+        return false;
+      }
+      return matches(t.name);
+    });
+
+    this._totalCount = filtered.length;
+    const start = this._page * PAGE_SIZE;
+    if (start >= filtered.length && this._page > 0) {
+      // The filter narrowed past the current page — go back to the first one
+      // rather than showing an empty grid under a "showing 46-60 of 12".
+      this._page = 0;
+      this._results = filtered.slice(0, PAGE_SIZE);
       return;
     }
-
-    const escaped = this._query.replace(/"/g, '\\"');
-    const offset = this._page * PAGE_SIZE;
-
-    const filterParts: string[] = [];
-    if (this._kindFilter) {
-      filterParts.push(`kind: {eq: "${this._kindFilter}"}`);
-    }
-    const filterClause = filterParts.length > 0
-      ? `filter: {${filterParts.join(', ')}}`
-      : '';
-
-    const query = `{
-  core {
-    catalog {
-      types(
-        ${filterClause}
-        order_by: [{field: "_distance_to_query", direction: ASC}]
-        limit: ${PAGE_SIZE}
-        offset: ${offset}
-      ) {
-        name kind description hugr_type catalog module
-        fields_aggregation { _rows_count }
-        _distance_to_query(query: "${escaped}")
-      }
-    }
+    this._results = filtered.slice(start, start + PAGE_SIZE);
   }
-}`;
 
-    try {
-      const resp = await this._client.query(query);
-
-      if (resp.errors && resp.errors.length > 0) {
-        // Semantic search not available — fall back
-        this._semanticAvailable = false;
-        this._semanticSearch = false;
-        await this._normalSearch();
-        return;
-      }
-
-      this._results = resp.data?.core?.catalog?.types || [];
-      // Semantic search does not provide aggregation; estimate from results
-      this._totalCount = this._results.length < PAGE_SIZE
-        ? offset + this._results.length
-        : offset + this._results.length + 1;
-    } catch {
-      // Semantic search failed — fall back
-      this._semanticAvailable = false;
-      this._semanticSearch = false;
-      await this._normalSearch();
+  private _matcher(query: string): (name: string) => boolean {
+    if (!query) {
+      return () => true;
     }
+    const needle = query.toLowerCase();
+    if (!needle.includes('*')) {
+      return name => name.toLowerCase().startsWith(needle);
+    }
+    // Escape everything a user might type, then let `*` through as `.*`.
+    const pattern = needle
+      .split('*')
+      .map(part => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
+      .join('.*');
+    const re = new RegExp(`^${pattern}$`);
+    return name => re.test(name.toLowerCase());
+  }
+
+  /**
+   * Paging is local, so it never re-queries.
+   */
+  private _goToPage(page: number): void {
+    this._page = page;
+    this._applyFilter();
+    this._renderResults();
   }
 }

@@ -1,9 +1,20 @@
 /**
  * Types Search WebviewViewProvider for VS Code.
  *
- * Provides a sidebar webview with search input, kind filter,
- * paginated results, and click-to-detail navigation.
- * Ported from JupyterLab typesSearch.ts.
+ * A sidebar webview listing the GraphQL types the connected engine serves —
+ * the generated surface included, which is what makes it useful: filters,
+ * aggregations and mutation inputs are most of what a schema is made of, and
+ * they are exactly the names that turn up in an error message.
+ *
+ * The listing comes from standard introspection (`__schema.types`, with hugr's
+ * `hugr_type` / `module` / `catalog` extensions) and is cached per connection,
+ * then filtered and paged locally. It used to be a server-side query over
+ * `core.catalog.types`; that view belonged to the compiled-schema storage and
+ * went with it — the schema is generated on read now, so there is no table of
+ * generated types left to page through. Semantic search went the same way: the
+ * vector index covers the LOGICAL model, never the generated types.
+ *
+ * Ported from JupyterLab typesSearch.ts — keep the two in step.
  */
 import * as vscode from 'vscode';
 import { HugrClient } from './hugrClient';
@@ -19,13 +30,15 @@ export class TypesSearchProvider implements vscode.WebviewViewProvider {
   // Search state
   private _query = '';
   private _kindFilter = '';
-  private _semanticSearch = false;
   private _page = 0;
   private _totalCount = 0;
   private _results: any[] = [];
   private _loading = false;
-  private _semanticAvailable = true;
+  private _error: string | null = null;
   private _searchVersion = 0;
+  // The connection's whole type list, fetched once. ~3k types on a large
+  // deployment: half a megabyte, and then every keystroke is local.
+  private _allTypes: any[] | null = null;
 
   private _onShowTypeDetail: (typeName: string) => void;
 
@@ -38,12 +51,12 @@ export class TypesSearchProvider implements vscode.WebviewViewProvider {
     this._client = client;
     this._query = '';
     this._kindFilter = '';
-    this._semanticSearch = false;
     this._page = 0;
     this._totalCount = 0;
     this._results = [];
     this._loading = false;
-    this._semanticAvailable = true;
+    this._error = null;
+    this._allTypes = null;
     this._updateWebview();
     if (client) {
       this._search();
@@ -81,11 +94,6 @@ export class TypesSearchProvider implements vscode.WebviewViewProvider {
           this._page = 0;
           this._search();
           break;
-        case 'semantic':
-          this._semanticSearch = !!msg.enabled;
-          this._page = 0;
-          this._search();
-          break;
         case 'page':
           this._page = msg.page ?? 0;
           this._search();
@@ -113,12 +121,11 @@ export class TypesSearchProvider implements vscode.WebviewViewProvider {
     this._postMessage({ command: 'loading', loading: true });
 
     try {
-      if (this._semanticSearch && this._semanticAvailable && this._query.trim()) {
-        await this._semanticSearchQuery();
-      } else {
-        await this._normalSearch();
-      }
-    } catch {
+      await this._ensureTypes();
+      this._error = null;
+      this._applyFilter();
+    } catch (err) {
+      this._error = err instanceof Error ? err.message : String(err);
       this._results = [];
       this._totalCount = 0;
     }
@@ -140,128 +147,85 @@ export class TypesSearchProvider implements vscode.WebviewViewProvider {
         hugrTypeLabel: r.hugr_type ? hugrTypeLabel(r.hugr_type) : '',
         hugrTypeColor: r.hugr_type ? hugrTypeColor(r.hugr_type) : '',
         module: r.module || '',
-        fieldCount: r.fields_aggregation?._rows_count ?? '',
+        catalog: r.catalog || '',
       }; }),
       totalCount: this._totalCount,
       page: this._page,
       pageSize: PAGE_SIZE,
+      error: this._error,
     });
   }
 
-  private _escapeGraphqlString(raw: string): string {
-    return raw.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  }
-
-  private _buildIlikePattern(raw: string): string {
-    const escaped = this._escapeGraphqlString(raw);
-    if (raw.includes('*')) {
-      return escaped.replace(/\*/g, '%');
-    }
-    return `${escaped}%`;
-  }
-
-  private async _normalSearch(): Promise<void> {
-    if (!this._client) return;
-
-    const filterParts: string[] = [];
-    if (this._query.trim()) {
-      const pattern = this._buildIlikePattern(this._query.trim());
-      filterParts.push(`name: { ilike: "${pattern}" }`);
-    }
-    if (this._kindFilter) {
-      filterParts.push(`kind: { eq: "${this._escapeGraphqlString(this._kindFilter)}" }`);
-    }
-
-    const filterClause = filterParts.length > 0
-      ? `filter: { ${filterParts.join(', ')} }`
-      : '';
-
-    const offset = this._page * PAGE_SIZE;
-
-    const query = `{
-  core {
-    catalog {
-      types(
-        ${filterClause}
-        order_by: [{field: "name", direction: ASC}]
-        limit: ${PAGE_SIZE}
-        offset: ${offset}
-      ) {
-        name kind description hugr_type module catalog
-        fields_aggregation { _rows_count }
-      }
-      types_aggregation(
-        ${filterClause}
-      ) {
-        _rows_count
-      }
-    }
-  }
-}`;
-
-    const resp = await this._client.query(query);
-    this._results = resp.data?.core?.catalog?.types ?? [];
-    this._totalCount = resp.data?.core?.catalog?.types_aggregation?._rows_count ?? 0;
-  }
-
-  private async _semanticSearchQuery(): Promise<void> {
-    if (!this._client) return;
-
-    const escaped = this._escapeGraphqlString(this._query);
-    const offset = this._page * PAGE_SIZE;
-
-    const filterParts: string[] = [];
-    if (this._kindFilter) {
-      filterParts.push(`kind: {eq: "${this._escapeGraphqlString(this._kindFilter)}"}`);
-    }
-    const filterClause = filterParts.length > 0
-      ? `filter: {${filterParts.join(', ')}}`
-      : '';
-
-    const query = `{
-  core {
-    catalog {
-      types(
-        ${filterClause}
-        order_by: [{field: "_distance_to_query", direction: ASC}]
-        limit: ${PAGE_SIZE}
-        offset: ${offset}
-      ) {
-        name kind description hugr_type catalog module
-        fields_aggregation { _rows_count }
-        _distance_to_query(query: "${escaped}")
-      }
-    }
-  }
-}`;
-
-    try {
-      const resp = await this._client.query(query);
-      if (resp.errors?.length) {
-        this._semanticAvailable = false;
-        this._semanticSearch = false;
-        this._postMessage({ command: 'semanticUnavailable' });
-        await this._normalSearch();
-        return;
-      }
-      this._results = resp.data?.core?.catalog?.types ?? [];
-      this._totalCount = this._results.length < PAGE_SIZE
-        ? offset + this._results.length
-        : offset + this._results.length + 1;
-    } catch {
-      this._semanticAvailable = false;
-      this._semanticSearch = false;
-      this._postMessage({ command: 'semanticUnavailable' });
-      await this._normalSearch();
-    }
-  }
-
-  // -------------------------------------------------------------------------
-  // Webview communication
-  // -------------------------------------------------------------------------
-
   private _postMessage(msg: any): void {
     this._view?.webview.postMessage(msg);
+  }
+
+  /**
+   * Fetch the connection's type list once and keep it.
+   *
+   * Standard introspection has no filter, no ordering and no pagination, so
+   * the choice is one payload per connection or one per keystroke; the list
+   * only changes when a data source is loaded or unloaded, which is what
+   * reconnecting is for.
+   */
+  private async _ensureTypes(): Promise<void> {
+    if (this._allTypes !== null || !this._client) return;
+    const resp = await this._client.query(`{
+  __schema {
+    types { name kind description hugr_type module catalog }
+  }
+}`);
+    if (resp.errors && resp.errors.length > 0) {
+      throw new Error(resp.errors.map((e: any) => e.message).join('; '));
+    }
+    const types: any[] = resp.data?.__schema?.types ?? [];
+    // Introspection's own types are not part of anyone's schema.
+    this._allTypes = types
+      .filter(t => t.name && !t.name.startsWith('__'))
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  }
+
+  /**
+   * Narrow the cached list and cut the requested page out of it.
+   *
+   * The matching rule is the one the server-side ilike used to implement, kept
+   * so muscle memory survives the move: bare text is a PREFIX match, and a `*`
+   * anywhere makes the whole pattern a wildcard match. Both case-insensitive.
+   */
+  private _applyFilter(): void {
+    const all = this._allTypes ?? [];
+    const matches = this._matcher(this._query.trim());
+
+    const filtered = all.filter(t => {
+      if (this._kindFilter && t.kind !== this._kindFilter) return false;
+      return matches(t.name);
+    });
+
+    this._totalCount = filtered.length;
+    const start = this._page * PAGE_SIZE;
+    if (start >= filtered.length && this._page > 0) {
+      // The filter narrowed past the current page — go back to the first one
+      // rather than showing an empty list under a "46-60 of 12".
+      this._page = 0;
+      this._results = filtered.slice(0, PAGE_SIZE);
+      return;
+    }
+    this._results = filtered.slice(start, start + PAGE_SIZE);
+  }
+
+  private _matcher(query: string): (name: string) => boolean {
+    if (!query) return () => true;
+    const needle = query.toLowerCase();
+    if (!needle.includes('*')) {
+      return name => name.toLowerCase().startsWith(needle);
+    }
+    // Escape everything a user might type, then let `*` through as `.*`.
+    const pattern = needle
+      .split('*')
+      .map(part => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
+      .join('.*');
+    const re = new RegExp(`^${pattern}$`);
+    return name => re.test(name.toLowerCase());
   }
 
   private _updateWebview(): void {
@@ -358,7 +322,6 @@ export class TypesSearchProvider implements vscode.WebviewViewProvider {
         <option value="INTERFACE" ${this._kindFilter === 'INTERFACE' ? 'selected' : ''}>Interface</option>
         <option value="UNION" ${this._kindFilter === 'UNION' ? 'selected' : ''}>Union</option>
       </select>
-      <label><input type="checkbox" id="semanticCheck" ${this._semanticSearch ? 'checked' : ''} ${!this._semanticAvailable ? 'disabled' : ''}/> Semantic</label>
     </div>
   </div>
   <div id="results" class="results">
@@ -370,7 +333,6 @@ export class TypesSearchProvider implements vscode.WebviewViewProvider {
     const vscode = acquireVsCodeApi();
     const searchInput = document.getElementById('searchInput');
     const kindFilter = document.getElementById('kindFilter');
-    const semanticCheck = document.getElementById('semanticCheck');
     const resultsDiv = document.getElementById('results');
     const paginationDiv = document.getElementById('pagination');
 
@@ -387,9 +349,6 @@ export class TypesSearchProvider implements vscode.WebviewViewProvider {
       vscode.postMessage({ command: 'filter', kind: kindFilter.value });
     });
 
-    semanticCheck.addEventListener('change', () => {
-      vscode.postMessage({ command: 'semantic', enabled: semanticCheck.checked });
-    });
 
     window.addEventListener('message', (event) => {
       const msg = event.data;
@@ -400,6 +359,12 @@ export class TypesSearchProvider implements vscode.WebviewViewProvider {
       }
 
       if (msg.command === 'results') {
+        if (msg.error) {
+          // A failed listing must not read as an empty catalog.
+          resultsDiv.innerHTML = '<div class="status">' + esc(msg.error) + '</div>';
+          paginationDiv.style.display = 'none';
+          return;
+        }
         if (msg.results.length === 0) {
           resultsDiv.innerHTML = '<div class="status">No results</div>';
           paginationDiv.style.display = 'none';
@@ -416,7 +381,7 @@ export class TypesSearchProvider implements vscode.WebviewViewProvider {
             + '<span class="result-name">' + esc(r.name) + '</span>'
             + badge
             + (r.module ? '<span class="result-module">' + esc(r.module) + '</span>' : '')
-            + (r.fieldCount !== '' ? '<span class="result-fields">' + r.fieldCount + ' fields</span>' : '')
+            + (r.catalog ? '<span class="result-fields">' + esc(r.catalog) + '</span>' : '')
             + '</div>';
         }
         resultsDiv.innerHTML = html;
@@ -449,11 +414,6 @@ export class TypesSearchProvider implements vscode.WebviewViewProvider {
             vscode.postMessage({ command: 'showType', typeName: row.getAttribute('data-type') });
           });
         });
-      }
-
-      if (msg.command === 'semanticUnavailable') {
-        semanticCheck.checked = false;
-        semanticCheck.disabled = true;
       }
 
       if (msg.command === 'setQuery') {
