@@ -15,6 +15,7 @@ import { hoverTooltip } from '@codemirror/view';
 import { ConnectionManagerWidget } from './connectionManager';
 import { HugrExplorerWidget } from './explorer/hugrExplorer';
 import { SchemaTreeSection } from './explorer/schemaTree';
+import { CatalogTreeSection } from './explorer/catalogTree';
 import { TypesSearchSection } from './explorer/typesSearch';
 import { DirectivesListSection } from './explorer/directivesList';
 import { showDetailModal } from './explorer/detailModal';
@@ -42,16 +43,26 @@ const explorerPlugin: JupyterFrontEndPlugin<void> = {
 
     // Section widgets — created lazily after connections load
     let schemaTree: SchemaTreeSection | null = null;
+    let catalogTree: CatalogTreeSection | null = null;
     let typesSearch: TypesSearchSection | null = null;
     let directivesList: DirectivesListSection | null = null;
 
     const initSections = () => {
       const schemaContainer = explorer.getSectionContainer('schema');
+      const catalogContainer = explorer.getSectionContainer('catalog');
       const typesContainer = explorer.getSectionContainer('types');
       const directivesContainer = explorer.getSectionContainer('directives');
 
       if (schemaContainer && !schemaTree) {
         schemaTree = new SchemaTreeSection(schemaContainer, (typeName: string) => {
+          const client = explorer.getClient();
+          if (client) {
+            showDetailModal(client, typeName, (nav: string) => explorer.navigateToTypes(nav));
+          }
+        });
+      }
+      if (catalogContainer && !catalogTree) {
+        catalogTree = new CatalogTreeSection(catalogContainer, (typeName: string) => {
           const client = explorer.getClient();
           if (client) {
             showDetailModal(client, typeName, (nav: string) => explorer.navigateToTypes(nav));
@@ -74,6 +85,7 @@ const explorerPlugin: JupyterFrontEndPlugin<void> = {
       // Ensure sections are initialized (containers exist after first render)
       initSections();
       if (schemaTree) schemaTree.setClient(client);
+      if (catalogTree) catalogTree.setClient(client);
       if (typesSearch) typesSearch.setClient(client);
       if (directivesList) directivesList.setClient(client);
     }) as EventListener);

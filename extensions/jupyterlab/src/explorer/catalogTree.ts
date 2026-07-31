@@ -1,0 +1,615 @@
+/**
+ * Catalog tree section — hugr's LOGICAL model, lazily loaded.
+ *
+ * The Schema tab shows the served GraphQL surface: hundreds of generated
+ * filters, aggregations and mutation inputs around the handful of things a
+ * user actually came to look at. This tab shows the model those were generated
+ * FROM — the module tree, the data objects with their relations, the callable
+ * functions, and the sources they came from — through the `_catalog` meta
+ * queries, which the engine resolves on the metadata path and filters per role.
+ *
+ * Every level is one query for one node, issued when the node is opened. The
+ * meta queries have a depth budget, so asking for the whole tree at once is
+ * both slower and liable to be truncated; asking per node never is.
+ */
+
+import { HugrClient } from '../hugrClient';
+import { escapeHtml } from '../utils';
+import { kindIcon, hugrTypeIcon } from './icons';
+
+// ---------------------------------------------------------------------------
+// Node model
+// ---------------------------------------------------------------------------
+
+export type CatalogNodeKind =
+  | 'group'
+  | 'dataSource'
+  | 'module'
+  | 'dataObject'
+  | 'function'
+  | 'field'
+  | 'relation'
+  | 'query'
+  | 'arg';
+
+export interface CatalogTreeNode {
+  id: string;
+  kind: CatalogNodeKind;
+  /** Text of the row. */
+  label: string;
+  /** Right-hand annotation: a GraphQL type, a source name, a relation kind. */
+  detail?: string;
+  description?: string;
+  /** The GraphQL type name this row can open a detail view for. */
+  typeName?: string;
+  /** Dotted module name — the identity of a module node, and the scope of a member. */
+  moduleName?: string;
+  expandable: boolean;
+  expanded: boolean;
+  children: CatalogTreeNode[] | null;
+  loading: boolean;
+  depth: number;
+}
+
+let _nextId = 0;
+function nextId(): string {
+  return `ctn-${_nextId++}`;
+}
+
+// ---------------------------------------------------------------------------
+// Queries — one per level, all depth 1
+// ---------------------------------------------------------------------------
+
+const DATA_SOURCES_QUERY = `{
+  _dataSources { name engine description readOnly asModule isExtension modules }
+}`;
+
+const MODULE_QUERY = `query($m: String!) {
+  _module(name: $m) {
+    name
+    description
+    modules { name description }
+    dataObjects { name type description moduleName dataSourceName }
+    functions { name type description moduleName dataSourceName }
+  }
+}`;
+
+const DATA_OBJECT_QUERY = `query($n: String!) {
+  _dataObject(name: $n) {
+    name
+    type
+    description
+    moduleName
+    dataSourceName
+    primaryKey
+    queries { name type }
+    fields {
+      name
+      description
+      hugr_type
+      type { name kind ofType { name kind ofType { name kind ofType { name kind } } } }
+    }
+    relations { name kind direction fieldName dataObject { name } }
+  }
+}`;
+
+const FUNCTION_QUERY = `query($m: String!, $n: String!) {
+  _function(module: $m, name: $n) {
+    name
+    type
+    description
+    isTable
+    args {
+      name
+      description
+      type { name kind ofType { name kind ofType { name kind ofType { name kind } } } }
+    }
+    returns { name kind ofType { name kind ofType { name kind } } }
+  }
+}`;
+
+/** Render a possibly-wrapped introspection type as SDL. */
+function typeLabel(t: any): string {
+  if (!t) {
+    return '';
+  }
+  if (t.name) {
+    return t.name;
+  }
+  const inner = typeLabel(t.ofType);
+  if (t.kind === 'NON_NULL') {
+    return `${inner}!`;
+  }
+  if (t.kind === 'LIST') {
+    return `[${inner}]`;
+  }
+  return inner;
+}
+
+/** The named type at the bottom of the wrappers — what a detail view opens. */
+function namedType(t: any): string | undefined {
+  if (!t) {
+    return undefined;
+  }
+  return t.name || namedType(t.ofType);
+}
+
+// ---------------------------------------------------------------------------
+// CatalogTreeSection
+// ---------------------------------------------------------------------------
+
+export class CatalogTreeSection {
+  private _container: HTMLElement;
+  private _onShowDetail: (typeName: string) => void;
+  private _client: HugrClient | null = null;
+  private _roots: CatalogTreeNode[] = [];
+  private _error: string | null = null;
+  /** Null until probed; false on an engine without the _catalog family. */
+  private _available: boolean | null = null;
+
+  constructor(container: HTMLElement, onShowDetail: (typeName: string) => void) {
+    this._container = container;
+    this._onShowDetail = onShowDetail;
+  }
+
+  setClient(client: HugrClient | null): void {
+    this._client = client;
+    this._roots = [];
+    this._error = null;
+    this._available = null;
+    this._render();
+    if (client) {
+      void this._load();
+    }
+  }
+
+  refresh(): void {
+    if (this._client) {
+      this._available = null;
+      void this._load();
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Loading
+  // -----------------------------------------------------------------------
+
+  private async _load(): Promise<void> {
+    if (!this._client) {
+      return;
+    }
+    try {
+      // Probe once per connection. The family arrived in v0.3.42, and an
+      // engine without it should say so rather than render an empty tree that
+      // looks like an empty catalog.
+      const probe = await this._client.query(
+        '{ __type(name: "_Module") { name } }'
+      );
+      this._available = !!probe.data?.__type?.name;
+      if (!this._available) {
+        this._error =
+          'This engine does not serve the logical-model catalog (_catalog). ' +
+          'Use the Schema tab, or upgrade the server.';
+        this._render();
+        return;
+      }
+    } catch (err) {
+      this._error = err instanceof Error ? err.message : String(err);
+      this._render();
+      return;
+    }
+
+    this._error = null;
+    this._roots = [
+      {
+        id: nextId(),
+        kind: 'group',
+        label: 'Modules',
+        expandable: true,
+        expanded: true,
+        children: null,
+        loading: false,
+        depth: 0,
+        moduleName: '',
+      },
+      {
+        id: nextId(),
+        kind: 'group',
+        label: 'Data Sources',
+        expandable: true,
+        expanded: false,
+        children: null,
+        loading: false,
+        depth: 0,
+      },
+    ];
+    this._render();
+    // The module tree opens expanded: it is the reason to be on this tab.
+    void this._loadChildren(this._roots[0]);
+  }
+
+  private async _loadChildren(node: CatalogTreeNode): Promise<void> {
+    if (!this._client || node.children !== null) {
+      return;
+    }
+    node.loading = true;
+    this._render();
+    try {
+      node.children = await this._fetchChildren(node);
+    } catch (err) {
+      node.children = [
+        {
+          id: nextId(),
+          kind: 'field',
+          label: err instanceof Error ? err.message : String(err),
+          expandable: false,
+          expanded: false,
+          children: null,
+          loading: false,
+          depth: node.depth + 1,
+        },
+      ];
+    }
+    node.loading = false;
+    this._render();
+  }
+
+  private async _fetchChildren(node: CatalogTreeNode): Promise<CatalogTreeNode[]> {
+    const client = this._client!;
+    const depth = node.depth + 1;
+
+    if (node.kind === 'group' && node.label === 'Data Sources') {
+      const resp = await client.query(DATA_SOURCES_QUERY);
+      this._throwOnErrors(resp);
+      const sources: any[] = resp.data?._dataSources ?? [];
+      return sources.map(s => ({
+        id: nextId(),
+        kind: 'dataSource' as const,
+        label: s.name,
+        detail: s.engine || '',
+        description: this._sourceDescription(s),
+        expandable: false,
+        expanded: false,
+        children: null,
+        loading: false,
+        depth,
+      }));
+    }
+
+    if (node.kind === 'group' || node.kind === 'module') {
+      const resp = await client.query(MODULE_QUERY, { m: node.moduleName ?? '' });
+      this._throwOnErrors(resp);
+      const mod = resp.data?._module;
+      if (!mod) {
+        return [];
+      }
+      const out: CatalogTreeNode[] = [];
+      for (const m of mod.modules ?? []) {
+        out.push({
+          id: nextId(),
+          kind: 'module',
+          label: this._leafName(m.name),
+          detail: '',
+          description: m.description || '',
+          moduleName: m.name,
+          expandable: true,
+          expanded: false,
+          children: null,
+          loading: false,
+          depth,
+        });
+      }
+      for (const o of mod.dataObjects ?? []) {
+        out.push({
+          id: nextId(),
+          kind: 'dataObject',
+          label: o.name,
+          detail: (o.type || '').toLowerCase(),
+          description: o.description || '',
+          typeName: o.name,
+          moduleName: o.moduleName ?? '',
+          expandable: true,
+          expanded: false,
+          children: null,
+          loading: false,
+          depth,
+        });
+      }
+      for (const f of mod.functions ?? []) {
+        out.push({
+          id: nextId(),
+          kind: 'function',
+          label: f.name,
+          detail: (f.type || '').toLowerCase(),
+          description: f.description || '',
+          moduleName: f.moduleName ?? '',
+          expandable: true,
+          expanded: false,
+          children: null,
+          loading: false,
+          depth,
+        });
+      }
+      return out;
+    }
+
+    if (node.kind === 'dataObject') {
+      const resp = await client.query(DATA_OBJECT_QUERY, { n: node.typeName });
+      this._throwOnErrors(resp);
+      const obj = resp.data?._dataObject;
+      if (!obj) {
+        return [];
+      }
+      const pk: string[] = obj.primaryKey ?? [];
+      const out: CatalogTreeNode[] = [];
+
+      // The query NAMES first: they are what a user writes, and they differ
+      // from the type name — the type carries the source prefix, the query
+      // does not.
+      for (const q of obj.queries ?? []) {
+        out.push({
+          id: nextId(),
+          kind: 'query',
+          label: q.name,
+          detail: (q.type || '').toLowerCase(),
+          expandable: false,
+          expanded: false,
+          children: null,
+          loading: false,
+          depth,
+        });
+      }
+      for (const f of obj.fields ?? []) {
+        const named = namedType(f.type);
+        out.push({
+          id: nextId(),
+          kind: 'field',
+          label: pk.includes(f.name) ? `${f.name} 🔑` : f.name,
+          detail: typeLabel(f.type),
+          description: f.description || '',
+          typeName: named,
+          expandable: false,
+          expanded: false,
+          children: null,
+          loading: false,
+          depth,
+        });
+      }
+      for (const r of obj.relations ?? []) {
+        const far = r.dataObject?.name;
+        out.push({
+          id: nextId(),
+          kind: 'relation',
+          label: r.fieldName || r.name,
+          detail: `${(r.kind || '').toLowerCase()} → ${far ?? '?'}`,
+          description: r.description || '',
+          typeName: far,
+          expandable: false,
+          expanded: false,
+          children: null,
+          loading: false,
+          depth,
+        });
+      }
+      return out;
+    }
+
+    if (node.kind === 'function') {
+      const resp = await client.query(FUNCTION_QUERY, {
+        m: node.moduleName ?? '',
+        n: node.label,
+      });
+      this._throwOnErrors(resp);
+      const fn = resp.data?._function;
+      if (!fn) {
+        return [];
+      }
+      const out: CatalogTreeNode[] = (fn.args ?? []).map((a: any) => ({
+        id: nextId(),
+        kind: 'arg' as const,
+        label: a.name,
+        detail: typeLabel(a.type),
+        description: a.description || '',
+        typeName: namedType(a.type),
+        expandable: false,
+        expanded: false,
+        children: null,
+        loading: false,
+        depth,
+      }));
+      const ret = typeLabel(fn.returns);
+      if (ret) {
+        out.push({
+          id: nextId(),
+          kind: 'field',
+          label: fn.isTable ? 'returns (rows)' : 'returns',
+          detail: ret,
+          typeName: namedType(fn.returns),
+          expandable: false,
+          expanded: false,
+          children: null,
+          loading: false,
+          depth,
+        });
+      }
+      return out;
+    }
+
+    return [];
+  }
+
+  private _sourceDescription(s: any): string {
+    const flags: string[] = [];
+    if (s.readOnly) {
+      flags.push('read-only');
+    }
+    if (s.asModule) {
+      flags.push('as module');
+    }
+    if (s.isExtension) {
+      flags.push('extension');
+    }
+    const modules = (s.modules ?? []).filter((m: string) => m).join(', ');
+    const parts = [s.description, flags.join(', '), modules && `modules: ${modules}`];
+    return parts.filter(Boolean).join(' · ');
+  }
+
+  /** The last dotted segment — a module row shows its own name, not its path. */
+  private _leafName(dotted: string): string {
+    const i = dotted.lastIndexOf('.');
+    return i >= 0 ? dotted.slice(i + 1) : dotted;
+  }
+
+  private _throwOnErrors(resp: any): void {
+    if (resp?.errors?.length) {
+      throw new Error(resp.errors.map((e: any) => e.message).join('; '));
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Render
+  // -----------------------------------------------------------------------
+
+  private _render(): void {
+    this._container.innerHTML = '';
+
+    if (!this._client) {
+      this._container.appendChild(this._status('No connection selected'));
+      return;
+    }
+    if (this._error) {
+      const err = this._status(this._error);
+      err.style.color = 'var(--jp-error-color1, #d32f2f)';
+      this._container.appendChild(err);
+      return;
+    }
+    if (this._roots.length === 0) {
+      this._container.appendChild(this._status('Loading…'));
+      return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    for (const root of this._roots) {
+      this._renderNode(root, fragment);
+    }
+    this._container.appendChild(fragment);
+  }
+
+  private _status(text: string): HTMLElement {
+    const div = document.createElement('div');
+    div.style.cssText =
+      'padding:8px;color:var(--jp-ui-font-color2, #888);font-size:12px;';
+    div.textContent = text;
+    return div;
+  }
+
+  private _renderNode(
+    node: CatalogTreeNode,
+    parent: DocumentFragment | HTMLElement
+  ): void {
+    parent.appendChild(this._createRow(node));
+
+    if (node.loading) {
+      const loading = document.createElement('div');
+      loading.className = 'hugr-schema-tree-row';
+      loading.style.cssText =
+        `padding:2px 4px 2px ${(node.depth + 1) * 16 + 20}px;` +
+        'color:var(--jp-ui-font-color2, #888);font-size:11px;font-style:italic;';
+      loading.textContent = 'Loading…';
+      parent.appendChild(loading);
+    }
+
+    if (node.expanded && node.children) {
+      for (const child of node.children) {
+        this._renderNode(child, parent);
+      }
+    }
+  }
+
+  private _createRow(node: CatalogTreeNode): HTMLElement {
+    const row = document.createElement('div');
+    row.className = 'hugr-schema-tree-row';
+    row.style.cssText =
+      `display:flex;align-items:center;gap:4px;padding:2px 4px 2px ${node.depth * 16 + 4}px;` +
+      'font-size:12px;cursor:default;white-space:nowrap;';
+
+    const twisty = document.createElement('span');
+    twisty.style.cssText = 'width:14px;flex:none;text-align:center;';
+    if (node.expandable) {
+      twisty.textContent = node.expanded ? '▾' : '▸';
+      twisty.style.cursor = 'pointer';
+      twisty.addEventListener('click', () => void this._toggle(node));
+    }
+    row.appendChild(twisty);
+
+    const icon = document.createElement('span');
+    icon.style.cssText = 'flex:none;display:inline-flex;';
+    icon.innerHTML = this._icon(node);
+    row.appendChild(icon);
+
+    const label = document.createElement('span');
+    label.textContent = node.label;
+    label.style.cssText = 'font-weight:500;';
+    if (node.expandable) {
+      label.style.cursor = 'pointer';
+      label.addEventListener('click', () => void this._toggle(node));
+    } else if (node.typeName) {
+      label.style.cursor = 'pointer';
+      label.addEventListener('click', () => this._onShowDetail(node.typeName!));
+    }
+    row.appendChild(label);
+
+    if (node.detail) {
+      const detail = document.createElement('span');
+      detail.textContent = node.detail;
+      // The detail slot carries different things per row — a GraphQL type, a
+      // source engine, a relation target — so it takes the muted annotation
+      // colour rather than a per-hugr-type one.
+      detail.style.cssText =
+        'color:var(--jp-ui-font-color2, #888);font-size:11px;opacity:0.9;';
+      row.appendChild(detail);
+    }
+
+    if (node.description) {
+      const desc = document.createElement('span');
+      desc.innerHTML = escapeHtml(node.description);
+      desc.style.cssText =
+        'color:var(--jp-ui-font-color2, #888);font-size:11px;' +
+        'overflow:hidden;text-overflow:ellipsis;';
+      desc.title = node.description;
+      row.appendChild(desc);
+    }
+
+    return row;
+  }
+
+  private _icon(node: CatalogTreeNode): string {
+    switch (node.kind) {
+      case 'module':
+      case 'group':
+        return hugrTypeIcon('module');
+      case 'dataObject':
+        return hugrTypeIcon(node.detail === 'view' ? 'view' : 'table');
+      case 'function':
+        return hugrTypeIcon('function');
+      case 'dataSource':
+        return kindIcon('OBJECT');
+      case 'relation':
+        return kindIcon('INTERFACE');
+      default:
+        return kindIcon('SCALAR');
+    }
+  }
+
+  private async _toggle(node: CatalogTreeNode): Promise<void> {
+    if (!node.expandable) {
+      return;
+    }
+    node.expanded = !node.expanded;
+    if (node.expanded && node.children === null) {
+      await this._loadChildren(node);
+      return;
+    }
+    this._render();
+  }
+}

@@ -1,6 +1,7 @@
 /**
  * HugrExplorerWidget — unified explorer panel with connection selector,
- * tabbed sections (Schema, Types, Directives), and pluggable section containers.
+ * tabbed sections (Schema, Catalog, Types, Directives), and pluggable section
+ * containers.
  */
 
 import { Widget } from '@lumino/widgets';
@@ -28,13 +29,14 @@ const explorerIcon = new LabIcon({
     '</svg>',
 });
 
-type SectionName = 'schema' | 'types' | 'directives';
+type SectionName = 'schema' | 'catalog' | 'types' | 'directives';
 
 export class HugrExplorerWidget extends Widget {
   private _client: HugrClient | null = null;
   private _connections: any[] = [];
   private _selectedConnection: string | null = null;
   private _schemaSection: HTMLElement | null = null;
+  private _catalogSection: HTMLElement | null = null;
   private _typesSection: HTMLElement | null = null;
   private _directivesSection: HTMLElement | null = null;
   private _activeSection: SectionName = 'schema';
@@ -129,6 +131,8 @@ export class HugrExplorerWidget extends Widget {
     switch (section) {
       case 'schema':
         return this._schemaSection;
+      case 'catalog':
+        return this._catalogSection;
       case 'types':
         return this._typesSection;
       case 'directives':
@@ -150,6 +154,7 @@ export class HugrExplorerWidget extends Widget {
         '<div class="hugr-explorer-empty">Add a connection in Connection Manager</div>';
       node.appendChild(container);
       this._schemaSection = null;
+      this._catalogSection = null;
       this._typesSection = null;
       this._directivesSection = null;
       return;
@@ -210,6 +215,7 @@ export class HugrExplorerWidget extends Widget {
 
     const sections: { key: SectionName; label: string }[] = [
       { key: 'schema', label: 'Schema' },
+      { key: 'catalog', label: 'Catalog' },
       { key: 'types', label: 'Types' },
       { key: 'directives', label: 'Directives' }
     ];
@@ -239,6 +245,13 @@ export class HugrExplorerWidget extends Widget {
     schemaDiv.style.display = this._activeSection === 'schema' ? '' : 'none';
     this._schemaSection = schemaDiv;
     content.appendChild(schemaDiv);
+
+    const catalogDiv = document.createElement('div');
+    catalogDiv.className = 'hugr-explorer-section';
+    catalogDiv.dataset.section = 'catalog';
+    catalogDiv.style.display = this._activeSection === 'catalog' ? '' : 'none';
+    this._catalogSection = catalogDiv;
+    content.appendChild(catalogDiv);
 
     const typesDiv = document.createElement('div');
     typesDiv.className = 'hugr-explorer-section';

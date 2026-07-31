@@ -71,6 +71,10 @@
           "name": "Schema"
         },
         {
+          "id": "hugr.catalog",
+          "name": "Catalog"
+        },
+        {
           "id": "hugr.types",
           "name": "Types",
           "type": "webview"

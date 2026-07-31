@@ -15,6 +15,7 @@
 import * as vscode from 'vscode';
 import { ConnectionTreeProvider } from './connectionTreeProvider';
 import { SchemaTreeProvider, SchemaTreeNode } from './explorer/schemaTreeProvider';
+import { CatalogTreeProvider } from './explorer/catalogTreeProvider';
 import { DirectivesTreeProvider } from './explorer/directivesTreeProvider';
 import { TypesSearchProvider } from './explorer/typesSearchProvider';
 import { showTypeDetail, showDirectiveDetail } from './explorer/detailPanel';
@@ -69,6 +70,10 @@ export function activate(context: vscode.ExtensionContext): void {
   const schemaProvider = new SchemaTreeProvider();
   vscode.window.registerTreeDataProvider('hugr.schema', schemaProvider);
 
+  // --- Catalog Tree (logical model) ---
+  const catalogProvider = new CatalogTreeProvider();
+  vscode.window.registerTreeDataProvider('hugr.catalog', catalogProvider);
+
   // --- Directives ---
   const directivesProvider = new DirectivesTreeProvider();
   vscode.window.registerTreeDataProvider('hugr.directives', directivesProvider);
@@ -91,6 +96,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const updateProvidersClient = () => {
     const client = connectionProvider.createClient();
     schemaProvider.setClient(client);
+    catalogProvider.setClient(client);
     directivesProvider.setClient(client);
     typesSearchProvider.setClient(client);
   };
