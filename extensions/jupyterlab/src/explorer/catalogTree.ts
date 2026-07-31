@@ -11,6 +11,12 @@
  * Every level is one query for one node, issued when the node is opened. The
  * meta queries have a depth budget, so asking for the whole tree at once is
  * both slower and liable to be truncated; asking per node never is.
+ *
+ * The search box on top is `_search`, the engine's own ranking over the same
+ * model: semantic where the deployment has an embedder, substring matching
+ * where it does not, and it says which. Results replace the tree while a query
+ * is present and the tree comes back when it is cleared — one tab, two ways
+ * into one model. Engines older than `_search` simply do not get the box.
  */
 
 import { HugrClient } from '../hugrClient';
@@ -49,6 +55,19 @@ export interface CatalogTreeNode {
   children: CatalogTreeNode[] | null;
   loading: boolean;
   depth: number;
+}
+
+interface SearchHit {
+  kind: string;
+  name: string;
+  moduleName: string;
+  dataSourceName?: string;
+  description?: string;
+  score: number;
+  objectName?: string;
+  type?: string;
+  hugrType?: string;
+  refObjectName?: string;
 }
 
 let _nextId = 0;
@@ -90,6 +109,19 @@ const DATA_OBJECT_QUERY = `query($n: String!) {
       type { name kind ofType { name kind ofType { name kind ofType { name kind } } } }
     }
     relations { name kind direction fieldName dataObject { name } }
+  }
+}`;
+
+const SEARCH_QUERY = `query($q: String!) {
+  _search(query: $q, limit: 50) {
+    lexical
+    lexicalReason
+    hasMore
+    filteredOut
+    items {
+      kind name moduleName dataSourceName description score
+      objectName type hugrType refObjectName
+    }
   }
 }`;
 
@@ -146,6 +178,17 @@ export class CatalogTreeSection {
   private _error: string | null = null;
   /** Null until probed; false on an engine without the _catalog family. */
   private _available: boolean | null = null;
+  /** Null until probed; false on an engine older than _search. */
+  private _searchAvailable: boolean | null = null;
+
+  // Search state. An empty query means "show the tree".
+  private _query = '';
+  private _hits: SearchHit[] | null = null;
+  private _searching = false;
+  private _searchNote = '';
+  private _searchVersion = 0;
+  private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private _searchInput: HTMLInputElement | null = null;
 
   constructor(container: HTMLElement, onShowDetail: (typeName: string) => void) {
     this._container = container;
@@ -157,6 +200,10 @@ export class CatalogTreeSection {
     this._roots = [];
     this._error = null;
     this._available = null;
+    this._searchAvailable = null;
+    this._query = '';
+    this._hits = null;
+    this._searchNote = '';
     this._render();
     if (client) {
       void this._load();
@@ -183,9 +230,12 @@ export class CatalogTreeSection {
       // engine without it should say so rather than render an empty tree that
       // looks like an empty catalog.
       const probe = await this._client.query(
-        '{ __type(name: "_Module") { name } }'
+        '{ m: __type(name: "_Module") { name } s: __type(name: "_SearchResult") { name } }'
       );
-      this._available = !!probe.data?.__type?.name;
+      this._available = !!probe.data?.m?.name;
+      // _search is newer than the rest of the family: an engine can serve the
+      // tree and not the search, and then the box has no business being there.
+      this._searchAvailable = !!probe.data?.s?.name;
       if (!this._available) {
         this._error =
           'This engine does not serve the logical-model catalog (_catalog). ' +
@@ -483,8 +533,20 @@ export class CatalogTreeSection {
       this._container.appendChild(err);
       return;
     }
+
+    if (this._searchAvailable) {
+      this._container.appendChild(this._searchBox());
+    }
+
     if (this._roots.length === 0) {
       this._container.appendChild(this._status('Loading…'));
+      return;
+    }
+
+    // A query in the box replaces the tree; clearing it brings the tree back
+    // with every node still open where the user left it.
+    if (this._query.trim()) {
+      this._container.appendChild(this._renderHits());
       return;
     }
 
@@ -493,6 +555,198 @@ export class CatalogTreeSection {
       this._renderNode(root, fragment);
     }
     this._container.appendChild(fragment);
+  }
+
+  private _searchBox(): HTMLElement {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'padding:4px;display:flex;gap:4px;align-items:center;';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'Search the model by meaning…';
+    input.value = this._query;
+    input.style.cssText = 'flex:1;min-width:0;';
+    input.addEventListener('input', () => {
+      this._query = input.value;
+      this._debouncedSearch();
+    });
+    // Rebuilding the box on every render would drop the caret; put it back.
+    this._searchInput = input;
+    wrap.appendChild(input);
+
+    if (this._query.trim()) {
+      const clear = document.createElement('button');
+      clear.textContent = '×';
+      clear.title = 'Back to the tree';
+      clear.style.cssText = 'flex:none;cursor:pointer;';
+      clear.addEventListener('click', () => {
+        this._query = '';
+        this._hits = null;
+        this._searchNote = '';
+        this._render();
+      });
+      wrap.appendChild(clear);
+    }
+
+    window.setTimeout(() => {
+      if (this._searchInput === input && this._query) {
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+      }
+    }, 0);
+
+    return wrap;
+  }
+
+  private _renderHits(): HTMLElement {
+    const box = document.createElement('div');
+
+    if (this._searching && this._hits === null) {
+      box.appendChild(this._status('Searching…'));
+      return box;
+    }
+    if (this._searchNote) {
+      const note = this._status(this._searchNote);
+      note.style.fontStyle = 'italic';
+      box.appendChild(note);
+    }
+    const hits = this._hits ?? [];
+    if (hits.length === 0 && !this._searching) {
+      box.appendChild(this._status('Nothing matches'));
+      return box;
+    }
+
+    for (const hit of hits) {
+      box.appendChild(this._hitRow(hit));
+    }
+    return box;
+  }
+
+  private _hitRow(hit: SearchHit): HTMLElement {
+    const row = document.createElement('div');
+    row.className = 'hugr-schema-tree-row';
+    row.style.cssText =
+      'display:flex;align-items:center;gap:6px;padding:3px 6px;font-size:12px;white-space:nowrap;';
+
+    const icon = document.createElement('span');
+    icon.style.cssText = 'flex:none;display:inline-flex;';
+    icon.innerHTML = this._hitIcon(hit);
+    row.appendChild(icon);
+
+    // A field hit is only actionable through its owner, so that is what the
+    // row names and what clicking it opens.
+    const target = hit.kind === 'FIELD' ? hit.objectName : hit.name;
+    const label = document.createElement('span');
+    label.textContent =
+      hit.kind === 'FIELD' ? `${hit.objectName}.${hit.name}` : hit.name;
+    label.style.cssText = 'font-weight:500;';
+    if (target) {
+      label.style.cursor = 'pointer';
+      label.addEventListener('click', () => this._onShowDetail(target));
+    }
+    row.appendChild(label);
+
+    const meta = document.createElement('span');
+    const bits = [
+      hit.kind === 'FIELD' ? hit.type : '',
+      hit.moduleName ? `in ${hit.moduleName}` : '',
+      hit.refObjectName ? `→ ${hit.refObjectName}` : '',
+    ].filter(Boolean);
+    meta.textContent = bits.join('  ');
+    meta.style.cssText = 'color:var(--jp-ui-font-color2, #888);font-size:11px;';
+    row.appendChild(meta);
+
+    if (hit.description) {
+      const desc = document.createElement('span');
+      desc.textContent = hit.description;
+      desc.title = hit.description;
+      desc.style.cssText =
+        'color:var(--jp-ui-font-color2, #888);font-size:11px;' +
+        'overflow:hidden;text-overflow:ellipsis;';
+      row.appendChild(desc);
+    }
+
+    return row;
+  }
+
+  private _hitIcon(hit: SearchHit): string {
+    switch (hit.kind) {
+      case 'MODULE':
+        return hugrTypeIcon('module');
+      case 'DATA_OBJECT':
+        return hugrTypeIcon('table');
+      case 'FUNCTION':
+        return hugrTypeIcon('function');
+      case 'DATA_SOURCE':
+        return kindIcon('OBJECT');
+      default:
+        return kindIcon('SCALAR');
+    }
+  }
+
+  private _debouncedSearch(): void {
+    if (this._debounceTimer !== null) {
+      clearTimeout(this._debounceTimer);
+    }
+    this._debounceTimer = setTimeout(() => {
+      this._debounceTimer = null;
+      void this._runSearch();
+    }, 300);
+  }
+
+  private async _runSearch(): Promise<void> {
+    const query = this._query.trim();
+    if (!this._client || !query) {
+      this._hits = null;
+      this._searchNote = '';
+      this._render();
+      return;
+    }
+    const version = ++this._searchVersion;
+    this._searching = true;
+    this._render();
+
+    try {
+      const resp = await this._client.query(SEARCH_QUERY, { q: query });
+      this._throwOnErrors(resp);
+      if (version !== this._searchVersion) {
+        return;
+      }
+      const page = resp.data?._search;
+      this._hits = page?.items ?? [];
+      this._searchNote = this._noteFor(page);
+    } catch (err) {
+      if (version !== this._searchVersion) {
+        return;
+      }
+      this._hits = [];
+      this._searchNote = err instanceof Error ? err.message : String(err);
+    }
+    this._searching = false;
+    this._render();
+  }
+
+  /**
+   * What the page says about itself. `lexical` is the one an agent-free human
+   * still needs: without a vector index the ranking is substring matching and
+   * every word has to appear, so "customer orders" finds nothing that a
+   * semantic ranking would have found.
+   */
+  private _noteFor(page: any): string {
+    if (!page) {
+      return '';
+    }
+    const bits: string[] = [];
+    if (page.lexical) {
+      bits.push('no vector index — substring matching, every word must appear');
+    }
+    if (page.filteredOut > 0) {
+      bits.push(`${page.filteredOut} hidden from you`);
+    }
+    if (page.hasMore) {
+      bits.push('more matches exist — narrow the query');
+    }
+    return bits.join(' · ');
   }
 
   private _status(text: string): HTMLElement {

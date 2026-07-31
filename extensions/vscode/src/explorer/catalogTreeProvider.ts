@@ -13,6 +13,12 @@
  * meta queries have a depth budget, so asking for the whole tree at once is
  * both slower and liable to be truncated; asking per node never is.
  *
+ * The view title carries a Search action: `_search` is the engine's own ranking
+ * over the same model — semantic where the deployment has an embedder,
+ * substring matching where it does not, and it says which. Results replace the
+ * tree until the search is cleared. Engines older than `_search` do not get the
+ * action.
+ *
  * Ported from JupyterLab catalogTree.ts — keep the two in step.
  */
 import * as vscode from 'vscode';
@@ -84,6 +90,19 @@ const DATA_OBJECT_QUERY = `query($n: String!) {
   }
 }`;
 
+const SEARCH_QUERY = `query($q: String!) {
+  _search(query: $q, limit: 50) {
+    lexical
+    lexicalReason
+    hasMore
+    filteredOut
+    items {
+      kind name moduleName dataSourceName description score
+      objectName type hugrType refObjectName
+    }
+  }
+}`;
+
 const FUNCTION_QUERY = `query($m: String!, $n: String!) {
   _function(module: $m, name: $n) {
     name
@@ -133,11 +152,19 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
   private _client: HugrClient | null = null;
   private _roots: CatalogTreeNode[] = [];
   private _error: string | null = null;
+  /** Non-null while a search is showing instead of the tree. */
+  private _hits: CatalogTreeNode[] | null = null;
+  private _searchAvailable = false;
+
+  get searchAvailable(): boolean {
+    return this._searchAvailable;
+  }
 
   setClient(client: HugrClient | null): void {
     this._client = client;
     this._roots = [];
     this._error = null;
+    this._hits = null;
     if (client) {
       void this._loadRoots();
     } else {
@@ -222,6 +249,10 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
       if (this._error) {
         return [this._message(this._error)];
       }
+      // A search replaces the tree until it is cleared.
+      if (this._hits !== null) {
+        return this._hits;
+      }
       return this._roots;
     }
     if (!element.expandable) {
@@ -249,8 +280,16 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
       // Probe once per connection. The family arrived in v0.3.42, and an
       // engine without it should say so rather than render an empty tree that
       // looks like an empty catalog.
-      const probe = await this._client.query('{ __type(name: "_Module") { name } }');
-      if (!probe.data?.__type?.name) {
+      const probe = await this._client.query(
+        '{ m: __type(name: "_Module") { name } s: __type(name: "_SearchResult") { name } }'
+      );
+      // _search is newer than the rest of the family: an engine can serve the
+      // tree and not the search.
+      this._searchAvailable = !!probe.data?.s?.name;
+      void vscode.commands.executeCommand(
+        'setContext', 'hugr.catalogSearchAvailable', this._searchAvailable
+      );
+      if (!probe.data?.m?.name) {
         this._error =
           'This engine does not serve the logical-model catalog (_catalog). ' +
           'Use the Schema view, or upgrade the server.';
@@ -431,6 +470,87 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
     }
 
     return [];
+  }
+
+  /**
+   * Run `_search` and show its hits instead of the tree.
+   *
+   * The note row is not decoration: without a vector index the ranking is
+   * substring matching and every word of the query has to appear, so "customer
+   * orders" finds nothing a semantic ranking would have found. filteredOut
+   * says the deployment holds matches this role may not see.
+   */
+  async search(query: string): Promise<void> {
+    if (!this._client || !query.trim()) {
+      this.clearSearch();
+      return;
+    }
+    try {
+      const resp = await this._client.query(SEARCH_QUERY, { q: query.trim() });
+      this._throwOnErrors(resp);
+      const page = resp.data?._search;
+      const hits: CatalogTreeNode[] = (page?.items ?? []).map((h: any) => {
+        // A field hit is only actionable through its owner, so that is what
+        // the row names and what clicking it opens.
+        const isField = h.kind === 'FIELD';
+        const detail = [
+          isField ? h.type : '',
+          h.moduleName ? `in ${h.moduleName}` : '',
+          h.refObjectName ? `→ ${h.refObjectName}` : '',
+        ]
+          .filter(Boolean)
+          .join('  ');
+        return {
+          id: nextId(),
+          kind: isField ? ('field' as const) : this._hitKind(h.kind),
+          label: isField ? `${h.objectName}.${h.name}` : h.name,
+          detail,
+          description: h.description || '',
+          typeName: isField ? h.objectName : h.name,
+          expandable: false,
+          childrenLoaded: true,
+        };
+      });
+      const note = this._noteFor(page);
+      this._hits = note ? [this._message(note), ...hits] : hits;
+      if (hits.length === 0) {
+        this._hits.push(this._message('Nothing matches'));
+      }
+    } catch (err) {
+      this._hits = [this._message(err instanceof Error ? err.message : String(err))];
+    }
+    this._onDidChangeTreeData.fire(undefined);
+  }
+
+  clearSearch(): void {
+    this._hits = null;
+    this._onDidChangeTreeData.fire(undefined);
+  }
+
+  private _hitKind(kind: string): CatalogNodeKind {
+    switch (kind) {
+      case 'MODULE':
+        return 'module';
+      case 'DATA_OBJECT':
+        return 'dataObject';
+      case 'FUNCTION':
+        return 'function';
+      case 'DATA_SOURCE':
+        return 'dataSource';
+      default:
+        return 'field';
+    }
+  }
+
+  private _noteFor(page: any): string {
+    if (!page) return '';
+    const bits: string[] = [];
+    if (page.lexical) {
+      bits.push('no vector index — substring matching, every word must appear');
+    }
+    if (page.filteredOut > 0) bits.push(`${page.filteredOut} hidden from you`);
+    if (page.hasMore) bits.push('more matches exist — narrow the query');
+    return bits.join(' · ');
   }
 
   private _sourceDescription(s: any): string {

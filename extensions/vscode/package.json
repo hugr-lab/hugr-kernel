@@ -169,6 +169,24 @@
         "title": "Install / Update Hugr Kernel",
         "icon": "$(cloud-download)",
         "category": "Hugr"
+      },
+      {
+        "command": "hugr.searchCatalog",
+        "title": "Search the Logical Model",
+        "category": "Hugr",
+        "icon": "$(search)"
+      },
+      {
+        "command": "hugr.clearCatalogSearch",
+        "title": "Clear Catalog Search",
+        "category": "Hugr",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "hugr.refreshCatalog",
+        "title": "Refresh Catalog",
+        "category": "Hugr",
+        "icon": "$(refresh)"
       }
     ],
     "menus": {
@@ -197,6 +215,21 @@
           "command": "hugr.refreshDirectives",
           "when": "view == hugr.directives",
           "group": "navigation"
+        },
+        {
+          "command": "hugr.searchCatalog",
+          "when": "view == hugr.catalog && hugr.catalogSearchAvailable",
+          "group": "navigation@1"
+        },
+        {
+          "command": "hugr.clearCatalogSearch",
+          "when": "view == hugr.catalog && hugr.catalogSearchAvailable",
+          "group": "navigation@2"
+        },
+        {
+          "command": "hugr.refreshCatalog",
+          "when": "view == hugr.catalog",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [

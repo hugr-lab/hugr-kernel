@@ -74,6 +74,21 @@ export function activate(context: vscode.ExtensionContext): void {
   const catalogProvider = new CatalogTreeProvider();
   vscode.window.registerTreeDataProvider('hugr.catalog', catalogProvider);
 
+  context.subscriptions.push(
+    vscode.commands.registerCommand('hugr.searchCatalog', async () => {
+      const query = await vscode.window.showInputBox({
+        title: 'Search the logical model',
+        prompt: 'Describe the data in your own words',
+        placeHolder: 'customer orders with payment status',
+      });
+      if (query !== undefined) {
+        await catalogProvider.search(query);
+      }
+    }),
+    vscode.commands.registerCommand('hugr.clearCatalogSearch', () => catalogProvider.clearSearch()),
+    vscode.commands.registerCommand('hugr.refreshCatalog', () => catalogProvider.refresh()),
+  );
+
   // --- Directives ---
   const directivesProvider = new DirectivesTreeProvider();
   vscode.window.registerTreeDataProvider('hugr.directives', directivesProvider);
