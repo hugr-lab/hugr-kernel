@@ -20,7 +20,6 @@
  */
 
 import { HugrClient } from '../hugrClient';
-import { escapeHtml } from '../utils';
 import { kindIcon, hugrTypeIcon } from './icons';
 
 // ---------------------------------------------------------------------------
@@ -176,8 +175,6 @@ export class CatalogTreeSection {
   private _client: HugrClient | null = null;
   private _roots: CatalogTreeNode[] = [];
   private _error: string | null = null;
-  /** Null until probed; false on an engine without the _catalog family. */
-  private _available: boolean | null = null;
   /** Null until probed; false on an engine older than _search. */
   private _searchAvailable: boolean | null = null;
 
@@ -189,6 +186,8 @@ export class CatalogTreeSection {
   private _searchVersion = 0;
   private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private _searchInput: HTMLInputElement | null = null;
+  /** Everything below the search box; the only part a keystroke redraws. */
+  private _body: HTMLElement | null = null;
 
   constructor(container: HTMLElement, onShowDetail: (typeName: string) => void) {
     this._container = container;
@@ -199,7 +198,6 @@ export class CatalogTreeSection {
     this._client = client;
     this._roots = [];
     this._error = null;
-    this._available = null;
     this._searchAvailable = null;
     this._query = '';
     this._hits = null;
@@ -212,7 +210,7 @@ export class CatalogTreeSection {
 
   refresh(): void {
     if (this._client) {
-      this._available = null;
+      this._searchAvailable = null;
       void this._load();
     }
   }
@@ -232,11 +230,10 @@ export class CatalogTreeSection {
       const probe = await this._client.query(
         '{ m: __type(name: "_Module") { name } s: __type(name: "_SearchResult") { name } }'
       );
-      this._available = !!probe.data?.m?.name;
       // _search is newer than the rest of the family: an engine can serve the
       // tree and not the search, and then the box has no business being there.
       this._searchAvailable = !!probe.data?.s?.name;
-      if (!this._available) {
+      if (!probe.data?.m?.name) {
         this._error =
           'This engine does not serve the logical-model catalog (_catalog). ' +
           'Use the Schema tab, or upgrade the server.';
@@ -283,7 +280,7 @@ export class CatalogTreeSection {
       return;
     }
     node.loading = true;
-    this._render();
+    this._renderBody();
     try {
       node.children = await this._fetchChildren(node);
     } catch (err) {
@@ -301,7 +298,7 @@ export class CatalogTreeSection {
       ];
     }
     node.loading = false;
-    this._render();
+    this._renderBody();
   }
 
   private async _fetchChildren(node: CatalogTreeNode): Promise<CatalogTreeNode[]> {
@@ -520,8 +517,17 @@ export class CatalogTreeSection {
   // Render
   // -----------------------------------------------------------------------
 
+  /**
+   * Rebuild the whole section: the search box, then the body.
+   *
+   * Called when the CONNECTION changes, never on a keystroke — the search box
+   * is a live DOM node the user is typing into, and re-creating it mid-word
+   * moves the caret. Everything that changes while typing goes through
+   * _renderBody, which replaces only what is below the box.
+   */
   private _render(): void {
     this._container.innerHTML = '';
+    this._body = null;
 
     if (!this._client) {
       this._container.appendChild(this._status('No connection selected'));
@@ -538,15 +544,28 @@ export class CatalogTreeSection {
       this._container.appendChild(this._searchBox());
     }
 
-    if (this._roots.length === 0) {
-      this._container.appendChild(this._status('Loading…'));
+    const body = document.createElement('div');
+    this._body = body;
+    this._container.appendChild(body);
+    this._renderBody();
+  }
+
+  private _renderBody(): void {
+    const body = this._body;
+    if (!body) {
       return;
     }
+    body.innerHTML = '';
 
     // A query in the box replaces the tree; clearing it brings the tree back
     // with every node still open where the user left it.
     if (this._query.trim()) {
-      this._container.appendChild(this._renderHits());
+      body.appendChild(this._renderHits());
+      return;
+    }
+
+    if (this._roots.length === 0) {
+      body.appendChild(this._status('Loading…'));
       return;
     }
 
@@ -554,7 +573,7 @@ export class CatalogTreeSection {
     for (const root of this._roots) {
       this._renderNode(root, fragment);
     }
-    this._container.appendChild(fragment);
+    body.appendChild(fragment);
   }
 
   private _searchBox(): HTMLElement {
@@ -567,33 +586,37 @@ export class CatalogTreeSection {
     input.value = this._query;
     input.style.cssText = 'flex:1;min-width:0;';
     input.addEventListener('input', () => {
+      const hadQuery = this._query.trim() !== '';
       this._query = input.value;
+      if (this._query.trim() === '') {
+        // Emptying the box is not a search — go straight back to the tree.
+        this._hits = null;
+        this._searchNote = '';
+        this._renderBody();
+        return;
+      }
+      if (!hadQuery) {
+        // First character: swap the tree out for the pending state now, so the
+        // panel does not sit on a stale tree until the debounce fires.
+        this._renderBody();
+      }
       this._debouncedSearch();
     });
-    // Rebuilding the box on every render would drop the caret; put it back.
     this._searchInput = input;
     wrap.appendChild(input);
 
-    if (this._query.trim()) {
-      const clear = document.createElement('button');
-      clear.textContent = '×';
-      clear.title = 'Back to the tree';
-      clear.style.cssText = 'flex:none;cursor:pointer;';
-      clear.addEventListener('click', () => {
-        this._query = '';
-        this._hits = null;
-        this._searchNote = '';
-        this._render();
-      });
-      wrap.appendChild(clear);
-    }
-
-    window.setTimeout(() => {
-      if (this._searchInput === input && this._query) {
-        input.focus();
-        input.setSelectionRange(input.value.length, input.value.length);
-      }
-    }, 0);
+    const clear = document.createElement('button');
+    clear.textContent = '×';
+    clear.title = 'Back to the tree';
+    clear.style.cssText = 'flex:none;cursor:pointer;';
+    clear.addEventListener('click', () => {
+      this._query = '';
+      input.value = '';
+      this._hits = null;
+      this._searchNote = '';
+      this._renderBody();
+    });
+    wrap.appendChild(clear);
 
     return wrap;
   }
@@ -601,7 +624,10 @@ export class CatalogTreeSection {
   private _renderHits(): HTMLElement {
     const box = document.createElement('div');
 
-    if (this._searching && this._hits === null) {
+    if (this._hits === null) {
+      // Typed, but the debounce has not fired yet — or the first search is
+      // still in flight. Either way nothing has been ANSWERED, and saying
+      // "nothing matches" here would be a lie the user acts on.
       box.appendChild(this._status('Searching…'));
       return box;
     }
@@ -699,12 +725,12 @@ export class CatalogTreeSection {
     if (!this._client || !query) {
       this._hits = null;
       this._searchNote = '';
-      this._render();
+      this._renderBody();
       return;
     }
     const version = ++this._searchVersion;
     this._searching = true;
-    this._render();
+    this._renderBody();
 
     try {
       const resp = await this._client.query(SEARCH_QUERY, { q: query });
@@ -723,7 +749,7 @@ export class CatalogTreeSection {
       this._searchNote = err instanceof Error ? err.message : String(err);
     }
     this._searching = false;
-    this._render();
+    this._renderBody();
   }
 
   /**
@@ -826,7 +852,7 @@ export class CatalogTreeSection {
 
     if (node.description) {
       const desc = document.createElement('span');
-      desc.innerHTML = escapeHtml(node.description);
+      desc.textContent = node.description;
       desc.style.cssText =
         'color:var(--jp-ui-font-color2, #888);font-size:11px;' +
         'overflow:hidden;text-overflow:ellipsis;';
@@ -864,6 +890,6 @@ export class CatalogTreeSection {
       await this._loadChildren(node);
       return;
     }
-    this._render();
+    this._renderBody();
   }
 }

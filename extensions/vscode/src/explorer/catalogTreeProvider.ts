@@ -176,6 +176,10 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
     if (this._client) {
       this._roots = [];
       this._error = null;
+      // A refresh reloads the tree, so it must also leave the search: keeping
+      // stale hits over a freshly reloaded model is the one state where the
+      // view would show something the engine no longer says.
+      this._hits = null;
       void this._loadRoots();
     }
   }
