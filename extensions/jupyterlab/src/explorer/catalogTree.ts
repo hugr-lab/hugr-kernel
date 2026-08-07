@@ -56,8 +56,11 @@ export interface CatalogTreeNode {
   depth: number;
 }
 
+type SearchMatch = 'NAME' | 'MEANING' | 'BOTH';
+
 interface SearchHit {
   kind: string;
+  matchedOn: SearchMatch;
   name: string;
   moduleName: string;
   dataSourceName?: string;
@@ -111,14 +114,14 @@ const DATA_OBJECT_QUERY = `query($n: String!) {
   }
 }`;
 
-const SEARCH_QUERY = `query($q: String!) {
-  _search(query: $q, limit: 50) {
+const SEARCH_QUERY = `query($q: String!, $m: _SearchMatch!) {
+  _search(query: $q, match: $m, limit: 50) {
     lexical
     lexicalReason
     hasMore
     filteredOut
     items {
-      kind name moduleName dataSourceName description score
+      kind matchedOn name moduleName dataSourceName description score
       objectName type hugrType refObjectName
     }
   }
@@ -180,6 +183,10 @@ export class CatalogTreeSection {
 
   // Search state. An empty query means "show the tree".
   private _query = '';
+  // Name and meaning are different questions — see the mode select. BOTH is
+  // the default because a user rarely decides in advance which one they are
+  // asking.
+  private _match: SearchMatch = 'BOTH';
   private _hits: SearchHit[] | null = null;
   private _searching = false;
   private _searchNote = '';
@@ -605,6 +612,31 @@ export class CatalogTreeSection {
     this._searchInput = input;
     wrap.appendChild(input);
 
+    const mode = document.createElement('select');
+    mode.title =
+      'What to match on. A name never enters the vector index — that is built ' +
+      'from descriptions — so an identifier is only findable by name.';
+    mode.style.cssText = 'flex:none;';
+    for (const [value, label] of [
+      ['BOTH', 'name + meaning'],
+      ['NAME', 'name'],
+      ['MEANING', 'meaning'],
+    ] as Array<[SearchMatch, string]>) {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = label;
+      opt.selected = value === this._match;
+      mode.appendChild(opt);
+    }
+    mode.addEventListener('change', () => {
+      this._match = mode.value as SearchMatch;
+      if (this._query.trim()) {
+        this._hits = null;
+        void this._runSearch();
+      }
+    });
+    wrap.appendChild(mode);
+
     const clear = document.createElement('button');
     clear.textContent = '×';
     clear.title = 'Back to the tree';
@@ -672,6 +704,19 @@ export class CatalogTreeSection {
     }
     row.appendChild(label);
 
+    // Which track found it. Worth showing: an exact name and an embedding
+    // distance are not on one scale, so a NAME hit at 1.0 and a MEANING hit at
+    // 0.6 are not "better" and "worse", they are answers to different
+    // questions.
+    if (hit.matchedOn === 'NAME') {
+      const badge = document.createElement('span');
+      badge.textContent = 'name';
+      badge.style.cssText =
+        'flex:none;font-size:10px;padding:0 4px;border-radius:3px;' +
+        'background:var(--jp-brand-color3, #dbeafe);color:var(--jp-brand-color1, #1d4ed8);';
+      row.appendChild(badge);
+    }
+
     const meta = document.createElement('span');
     const bits = [
       hit.kind === 'FIELD' ? hit.type : '',
@@ -733,7 +778,7 @@ export class CatalogTreeSection {
     this._renderBody();
 
     try {
-      const resp = await this._client.query(SEARCH_QUERY, { q: query });
+      const resp = await this._client.query(SEARCH_QUERY, { q: query, m: this._match });
       this._throwOnErrors(resp);
       if (version !== this._searchVersion) {
         return;
@@ -763,7 +808,9 @@ export class CatalogTreeSection {
       return '';
     }
     const bits: string[] = [];
-    if (page.lexical) {
+    if (this._match === 'NAME') {
+      bits.push('matching names only');
+    } else if (page.lexical) {
       bits.push('no vector index — substring matching, every word must appear');
     }
     if (page.filteredOut > 0) {

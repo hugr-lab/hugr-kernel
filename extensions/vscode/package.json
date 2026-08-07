@@ -177,6 +177,12 @@
         "icon": "$(search)"
       },
       {
+        "command": "hugr.setCatalogSearchMode",
+        "title": "Catalog Search: Name or Meaning",
+        "category": "Hugr",
+        "icon": "$(filter)"
+      },
+      {
         "command": "hugr.clearCatalogSearch",
         "title": "Clear Catalog Search",
         "category": "Hugr",
@@ -222,14 +228,19 @@
           "group": "navigation@1"
         },
         {
-          "command": "hugr.clearCatalogSearch",
+          "command": "hugr.setCatalogSearchMode",
           "when": "view == hugr.catalog && hugr.catalogSearchAvailable",
           "group": "navigation@2"
         },
         {
+          "command": "hugr.clearCatalogSearch",
+          "when": "view == hugr.catalog && hugr.catalogSearchAvailable",
+          "group": "navigation@3"
+        },
+        {
           "command": "hugr.refreshCatalog",
           "when": "view == hugr.catalog",
-          "group": "navigation@3"
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [

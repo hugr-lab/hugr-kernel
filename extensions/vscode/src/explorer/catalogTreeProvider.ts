@@ -25,6 +25,8 @@ import * as vscode from 'vscode';
 import { HugrClient } from './hugrClient';
 import { kindIconPath, hugrTypeIconPath } from './icons';
 
+export type SearchMatch = 'NAME' | 'MEANING' | 'BOTH';
+
 export type CatalogNodeKind =
   | 'group'
   | 'dataSource'
@@ -90,14 +92,14 @@ const DATA_OBJECT_QUERY = `query($n: String!) {
   }
 }`;
 
-const SEARCH_QUERY = `query($q: String!) {
-  _search(query: $q, limit: 50) {
+const SEARCH_QUERY = `query($q: String!, $m: _SearchMatch!) {
+  _search(query: $q, match: $m, limit: 50) {
     lexical
     lexicalReason
     hasMore
     filteredOut
     items {
-      kind name moduleName dataSourceName description score
+      kind matchedOn name moduleName dataSourceName description score
       objectName type hugrType refObjectName
     }
   }
@@ -154,6 +156,15 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
   private _error: string | null = null;
   /** Non-null while a search is showing instead of the tree. */
   private _hits: CatalogTreeNode[] | null = null;
+  /**
+   * What a search matches on. Name and meaning are different questions — a
+   * name never enters the vector index, which is built from descriptions — and
+   * BOTH is the default because a user rarely decides in advance which one
+   * they are asking.
+   */
+  private _match: SearchMatch = 'BOTH';
+  /** The last query, so a mode change re-runs it instead of asking again. */
+  private _lastQuery = '';
   private _searchAvailable = false;
 
   get searchAvailable(): boolean {
@@ -484,13 +495,26 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
    * orders" finds nothing a semantic ranking would have found. filteredOut
    * says the deployment holds matches this role may not see.
    */
+  get match(): SearchMatch {
+    return this._match;
+  }
+
+  /** Change the track and re-run the last query, if there was one. */
+  async setMatch(match: SearchMatch): Promise<void> {
+    this._match = match;
+    if (this._lastQuery) {
+      await this.search(this._lastQuery);
+    }
+  }
+
   async search(query: string): Promise<void> {
     if (!this._client || !query.trim()) {
       this.clearSearch();
       return;
     }
+    this._lastQuery = query.trim();
     try {
-      const resp = await this._client.query(SEARCH_QUERY, { q: query.trim() });
+      const resp = await this._client.query(SEARCH_QUERY, { q: query.trim(), m: this._match });
       this._throwOnErrors(resp);
       const page = resp.data?._search;
       const hits: CatalogTreeNode[] = (page?.items ?? []).map((h: any) => {
@@ -508,7 +532,10 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
           id: nextId(),
           kind: isField ? ('field' as const) : this._hitKind(h.kind),
           label: isField ? `${h.objectName}.${h.name}` : h.name,
-          detail,
+          // Mark which track found it. An exact name and an embedding distance
+          // are not on one scale, so a name hit is not "better" than a meaning
+          // hit — it is an answer to a different question.
+          detail: h.matchedOn === 'NAME' ? [detail, '(name)'].filter(Boolean).join('  ') : detail,
           description: h.description || '',
           typeName: isField ? h.objectName : h.name,
           expandable: false,
@@ -528,6 +555,7 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
 
   clearSearch(): void {
     this._hits = null;
+    this._lastQuery = '';
     this._onDidChangeTreeData.fire(undefined);
   }
 
@@ -548,8 +576,11 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
 
   private _noteFor(page: any): string {
     if (!page) return '';
-    const bits: string[] = [];
-    if (page.lexical) {
+    const bits: string[] = [
+      this._match === 'BOTH' ? 'matching names and meaning' :
+        this._match === 'NAME' ? 'matching names only' : 'matching meaning only',
+    ];
+    if (this._match !== 'NAME' && page.lexical) {
       bits.push('no vector index — substring matching, every word must appear');
     }
     if (page.filteredOut > 0) bits.push(`${page.filteredOut} hidden from you`);

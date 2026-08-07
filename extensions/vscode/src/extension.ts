@@ -15,7 +15,7 @@
 import * as vscode from 'vscode';
 import { ConnectionTreeProvider } from './connectionTreeProvider';
 import { SchemaTreeProvider, SchemaTreeNode } from './explorer/schemaTreeProvider';
-import { CatalogTreeProvider } from './explorer/catalogTreeProvider';
+import { CatalogTreeProvider, SearchMatch } from './explorer/catalogTreeProvider';
 import { DirectivesTreeProvider } from './explorer/directivesTreeProvider';
 import { TypesSearchProvider } from './explorer/typesSearchProvider';
 import { showTypeDetail, showDirectiveDetail } from './explorer/detailPanel';
@@ -83,6 +83,31 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       if (query !== undefined) {
         await catalogProvider.search(query);
+      }
+    }),
+    vscode.commands.registerCommand('hugr.setCatalogSearchMode', async () => {
+      const picked = await vscode.window.showQuickPick(
+        [
+          {
+            label: 'Name and meaning',
+            description: 'BOTH',
+            detail: 'Name matches first, then semantic ones (default)',
+          },
+          {
+            label: 'Name only',
+            description: 'NAME',
+            detail: 'Substring matching over identifiers. Needs no embedder — and it is the only way to find a name, which never enters the vector index',
+          },
+          {
+            label: 'Meaning only',
+            description: 'MEANING',
+            detail: 'Semantic ranking over descriptions',
+          },
+        ],
+        { title: 'What should the catalog search match on?' },
+      );
+      if (picked) {
+        await catalogProvider.setMatch(picked.description as SearchMatch);
       }
     }),
     vscode.commands.registerCommand('hugr.clearCatalogSearch', () => catalogProvider.clearSearch()),
