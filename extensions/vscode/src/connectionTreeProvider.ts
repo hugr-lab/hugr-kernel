@@ -85,27 +85,25 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
     const tlsSkipVerify = conn.tls_skip_verify ?? false;
 
     if (conn.auth_type === 'browser') {
-      // For browser auth, read token from OIDC session or connections.json
-      const tokenData = oidc.getToken(name);
-      if (tokenData) {
-        return new HugrClient({
-          url: conn.url,
-          authType: 'bearer',
-          token: tokenData.access_token,
-          tlsSkipVerify,
-        });
-      }
-      // Fallback: read from connections.json tokens field
-      if (conn.tokens?.access_token) {
-        return new HugrClient({
-          url: conn.url,
-          authType: 'bearer',
-          token: conn.tokens.access_token,
-          tlsSkipVerify,
-        });
-      }
-      // Not authenticated — return public client (queries will fail with auth error)
-      return new HugrClient({ url: conn.url, authType: 'public', tlsSkipVerify });
+      // The token is resolved PER REQUEST, never frozen into the client: the
+      // explorer panels hold their client for the life of a connection, and a
+      // background refresh has to reach every one of them. getValidToken also
+      // refreshes inline when the token is about to expire.
+      return new HugrClient({
+        url: conn.url,
+        authType: 'bearer',
+        tlsSkipVerify,
+        tokenProvider: async () => {
+          const tokenData = await oidc.getValidToken(name);
+          if (tokenData) {
+            return tokenData.access_token;
+          }
+          // No session in this window — another writer (the kernel, the
+          // JupyterLab service) may keep the shared config's token fresh.
+          const current = this._connections.find(c => c.name === name);
+          return current?.tokens?.access_token ?? null;
+        },
+      });
     }
 
     return new HugrClient({
@@ -141,12 +139,12 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
       item.iconPath = new vscode.ThemeIcon(isDefault ? 'star-full' : 'plug');
     }
 
-    // Set contextValue to control menu visibility
-    if (isBrowser) {
-      item.contextValue = authenticated ? 'connection_browser_auth' : 'connection_browser_noauth';
-    } else {
-      item.contextValue = 'connection';
-    }
+    // Set contextValue to control menu visibility. The `_default` suffix
+    // marks the ACTIVE connection — the reload action lives on that row only.
+    const base = isBrowser
+      ? (authenticated ? 'connection_browser_auth' : 'connection_browser_noauth')
+      : 'connection';
+    item.contextValue = isDefault ? `${base}_default` : base;
 
     return item;
   }
@@ -254,6 +252,7 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
         await oidc.startLogin(entry.name, entry.url, this._secrets, () => this._fireTreeChange(), entry.tls_skip_verify);
         vscode.window.showInformationMessage(`${entry.name}: logged in`);
         this._load();
+        this.notifyAuthChanged();
       } catch (e: any) {
         vscode.window.showWarningMessage(`Saved, but login failed: ${e.message}`);
       }
@@ -341,7 +340,7 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
           } else if (entry.auth_type === 'bearer' && entry.auth_credential) {
             headers['Authorization'] = `Bearer ${entry.auth_credential}`;
           } else if (entry.auth_type === 'browser') {
-            const tokenData = oidc.getToken(entry.name);
+            const tokenData = await oidc.getValidToken(entry.name);
             if (tokenData) {
               headers['Authorization'] = `Bearer ${tokenData.access_token}`;
             }
@@ -376,6 +375,7 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
       );
       vscode.window.showInformationMessage(`${entry.name}: logged in`);
       this._load();
+      this.notifyAuthChanged();
     } catch (e: any) {
       vscode.window.showErrorMessage(`Login failed: ${e.message}`);
     }
@@ -392,6 +392,18 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
     }
     vscode.window.showInformationMessage(`${entry.name}: logged out`);
     this._load();
+    this.notifyAuthChanged();
+  }
+
+  /**
+   * Login/logout changed WHO we are without changing WHICH connection is the
+   * default — the explorer panels still need fresh clients and a reload (a
+   * tree full of 401 rows does not fix itself). Deliberately not called on
+   * background token refresh: the per-request tokenProvider covers that, and
+   * reloading every panel each 15 minutes would throw away tree state.
+   */
+  notifyAuthChanged(): void {
+    this._onDidChangeDefault.fire(this.getDefaultConnection());
   }
 
   // --- File I/O ---
@@ -403,17 +415,28 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
 
   private _load(): void {
     const configPath = this._configPath();
+    let data: string | null = null;
     try {
-      const data = fs.readFileSync(configPath, 'utf-8');
-      const cfg: ConnectionsFile = JSON.parse(data);
-      this._connections = cfg.connections || [];
-      this._defaultName = cfg.default || (this._connections.length > 0 ? this._connections[0].name : '');
-      // Preserve fields we don't manage (kernels, etc.)
-      const { default: _d, connections: _c, ...rest } = cfg;
-      this._extraFields = rest;
+      data = fs.readFileSync(configPath, 'utf-8');
     } catch {
+      // No file — a real empty config.
       this._connections = [];
       this._defaultName = '';
+      this._extraFields = {};
+    }
+    if (data !== null) {
+      try {
+        const cfg: ConnectionsFile = JSON.parse(data);
+        this._connections = cfg.connections || [];
+        this._defaultName = cfg.default || (this._connections.length > 0 ? this._connections[0].name : '');
+        // Preserve fields we don't manage (kernels, etc.)
+        const { default: _d, connections: _c, ...rest } = cfg;
+        this._extraFields = rest;
+      } catch {
+        // Unparseable — another process's write in flight. Keep what we have;
+        // the watcher reloads when the write lands. Resetting to [] here and
+        // saving later is how a user's connection list gets deleted.
+      }
     }
     this._onDidChangeTreeData.fire(undefined);
     this._fireDefaultChangeIfNeeded();
@@ -430,7 +453,11 @@ export class ConnectionTreeProvider implements vscode.TreeDataProvider<Connectio
       connections: this._connections,
       ...this._extraFields,
     };
-    fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf-8');
+    // Write-to-temp + rename: several processes share this file, and a torn
+    // read on their side becomes a deleted connection list on ours.
+    const tmp = path.join(dir, `.connections.json.${process.pid}.tmp`);
+    fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2) + '\n', 'utf-8');
+    fs.renameSync(tmp, configPath);
     this._onDidChangeTreeData.fire(undefined);
     this._fireDefaultChangeIfNeeded();
   }

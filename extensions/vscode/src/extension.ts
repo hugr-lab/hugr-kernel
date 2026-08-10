@@ -15,9 +15,10 @@
 import * as vscode from 'vscode';
 import { ConnectionTreeProvider } from './connectionTreeProvider';
 import { SchemaTreeProvider, SchemaTreeNode } from './explorer/schemaTreeProvider';
+import { CatalogTreeProvider, CatalogTreeNode } from './explorer/catalogTreeProvider';
 import { DirectivesTreeProvider } from './explorer/directivesTreeProvider';
-import { TypesSearchProvider } from './explorer/typesSearchProvider';
-import { showTypeDetail, showDirectiveDetail } from './explorer/detailPanel';
+import { SearchViewProvider } from './explorer/searchViewProvider';
+import { showTypeDetail, showDirectiveDetail, showDetail, DetailTarget } from './explorer/detailPanel';
 import { setExtensionUri } from './explorer/icons';
 import { installKernel } from './installKernel';
 
@@ -61,6 +62,12 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('hugr.testConnection', (entry) => connectionProvider.testConnection(entry)),
     vscode.commands.registerCommand('hugr.editConnection', (entry) => connectionProvider.editConnection(entry)),
     vscode.commands.registerCommand('hugr.refreshConnections', () => connectionProvider.refresh()),
+    // Same effect as flipping the default away and back: fresh clients for
+    // every panel and a full reload — for after a login or a config change.
+    vscode.commands.registerCommand('hugr.reloadConnection', () => {
+      connectionProvider.refresh();
+      connectionProvider.notifyAuthChanged();
+    }),
     vscode.commands.registerCommand('hugr.loginConnection', (entry) => connectionProvider.loginConnection(entry)),
     vscode.commands.registerCommand('hugr.logoutConnection', (entry) => connectionProvider.logoutConnection(entry)),
   );
@@ -69,30 +76,54 @@ export function activate(context: vscode.ExtensionContext): void {
   const schemaProvider = new SchemaTreeProvider();
   vscode.window.registerTreeDataProvider('hugr.schema', schemaProvider);
 
+  // --- Catalog Tree (logical model) ---
+  const catalogProvider = new CatalogTreeProvider();
+  vscode.window.registerTreeDataProvider('hugr.catalog', catalogProvider);
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('hugr.showCatalogDetail', (target: DetailTarget) => {
+      const client = connectionProvider.createClient();
+      if (!client) {
+        vscode.window.showWarningMessage('No connection available');
+        return;
+      }
+      if (target?.view && target?.name != null) {
+        showDetail(target, client);
+      }
+    }),
+    vscode.commands.registerCommand('hugr.refreshCatalog', () => catalogProvider.refresh()),
+    vscode.commands.registerCommand('hugr.refreshCatalogNode', (node: CatalogTreeNode) => {
+      if (node) {
+        catalogProvider.refreshNode(node);
+      }
+    }),
+  );
+
   // --- Directives ---
   const directivesProvider = new DirectivesTreeProvider();
   vscode.window.registerTreeDataProvider('hugr.directives', directivesProvider);
 
-  // --- Types Search ---
-  const typesSearchProvider = new TypesSearchProvider(
+  // --- Search (the logical-model _search, in the section Types used to hold) ---
+  const searchProvider = new SearchViewProvider(
     context.extensionUri,
-    (typeName: string) => {
+    (target: DetailTarget) => {
       const client = connectionProvider.createClient();
       if (client) {
-        showTypeDetail(typeName, client);
+        showDetail(target, client);
       }
     },
   );
   context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider('hugr.types', typesSearchProvider),
+    vscode.window.registerWebviewViewProvider('hugr.types', searchProvider),
   );
 
   // --- Connection change handler ---
   const updateProvidersClient = () => {
     const client = connectionProvider.createClient();
     schemaProvider.setClient(client);
+    catalogProvider.setClient(client);
     directivesProvider.setClient(client);
-    typesSearchProvider.setClient(client);
+    searchProvider.setClient(client);
   };
 
   // Subscribe to default connection changes
@@ -133,7 +164,7 @@ export function activate(context: vscode.ExtensionContext): void {
         ? nodeOrName
         : nodeOrName?.typeName;
       if (typeName) {
-        typesSearchProvider.searchFor(typeName);
+        searchProvider.searchFor(typeName);
         vscode.commands.executeCommand('hugr.types.focus');
       }
     }),

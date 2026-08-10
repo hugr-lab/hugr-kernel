@@ -55,6 +55,8 @@ class LoginSession:
         self.issuer = issuer
         self.tls_skip_verify = tls_skip_verify
         self._refresh_handle = None
+        # Consecutive transient refresh failures; resets on success.
+        self._retry_count = 0
 
     def start_refresh_timer(self):
         """Schedule proactive refresh 30 seconds before token expiry."""
@@ -79,11 +81,21 @@ class LoginSession:
                     "client_id": self.client_id,
                 })
             if resp.status_code != 200:
-                log.warning("Refresh failed for %r: %s", self.connection_name, resp.text)
-                self._on_refresh_failure()
+                # Only a REJECTED grant ends the session — 400/401 from the
+                # token endpoint means the refresh token is expired, revoked
+                # or wrong. A 429 rate limit, a 408, an IdP restart or a 5xx
+                # is transient and must not log the user out.
+                if resp.status_code in (400, 401):
+                    log.warning("Refresh rejected for %r: %s", self.connection_name, resp.text)
+                    self._on_refresh_failure()
+                else:
+                    log.warning("Refresh failed for %r (HTTP %s), retrying in 30s",
+                                self.connection_name, resp.status_code)
+                    self._schedule_retry()
                 return
 
             tokens = resp.json()
+            self._retry_count = 0
             self.access_token = tokens["access_token"]
             self.expires_at = time.time() + tokens.get("expires_in", 300)
             if "refresh_token" in tokens:
@@ -100,11 +112,25 @@ class LoginSession:
             self.start_refresh_timer()
 
         except Exception as e:
-            log.error("Refresh error for %r: %s", self.connection_name, e)
+            # Network-level failure — transient by assumption; the grant was
+            # never evaluated, so the session stays.
+            log.error("Refresh error for %r: %s — retrying in 30s", self.connection_name, e)
+            self._schedule_retry()
+
+    def _schedule_retry(self):
+        # Retry — but not forever: after ~10 minutes of failures the stale
+        # session only reports "logged in" over a connection that 401s, so
+        # give the UI its honest re-login state instead.
+        self._retry_count += 1
+        if self._retry_count > 20:
+            log.warning("Refresh kept failing for %r — giving up", self.connection_name)
             self._on_refresh_failure()
+            return
+        self.cancel_refresh_timer()
+        self._refresh_handle = IOLoop.current().call_later(30, self._do_refresh)
 
     def _on_refresh_failure(self):
-        """Clear tokens on refresh failure."""
+        """Clear tokens on a rejected grant — only a new login can recover."""
         _clear_tokens(self.connection_name)
         _sessions.pop(self.connection_name, None)
         log.warning("Session expired for %r — user must re-login", self.connection_name)
@@ -127,7 +153,12 @@ def _load_config() -> dict:
 def _save_config(cfg: dict) -> None:
     p = _config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(cfg, indent=2) + "\n")
+    # Write-to-temp + rename: several processes share this file (kernel,
+    # VS Code, this service), and a torn read on their side can end with a
+    # deleted connection list.
+    tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(cfg, indent=2) + "\n")
+    tmp.replace(p)
 
 
 def _write_tokens(connection_name: str, access_token: str, expires_at: float,

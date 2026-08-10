@@ -135,6 +135,11 @@ export class SchemaTreeProvider implements vscode.TreeDataProvider<SchemaTreeNod
 
     const item = new vscode.TreeItem(element.label, state);
 
+    // Nodes get fresh ids on every reload — without an explicit id VS Code
+    // matches by label and keeps stale expansion state across a connection
+    // reload. New ids collapse and reset the tree.
+    item.id = element.id;
+
     // Description (return type)
     if (element.displayType) {
       item.description = element.displayType;

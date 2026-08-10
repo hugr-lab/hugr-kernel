@@ -51,3 +51,6 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Packaged VS Code extension
+*.vsix

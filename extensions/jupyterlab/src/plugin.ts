@@ -15,9 +15,10 @@ import { hoverTooltip } from '@codemirror/view';
 import { ConnectionManagerWidget } from './connectionManager';
 import { HugrExplorerWidget } from './explorer/hugrExplorer';
 import { SchemaTreeSection } from './explorer/schemaTree';
-import { TypesSearchSection } from './explorer/typesSearch';
+import { CatalogTreeSection, CatalogOpenTarget } from './explorer/catalogTree';
+import { SearchSection } from './explorer/searchSection';
 import { DirectivesListSection } from './explorer/directivesList';
-import { showDetailModal } from './explorer/detailModal';
+import { showDetailModal, showCatalogDetailModal } from './explorer/detailModal';
 import { graphqlLanguage } from './graphql/language';
 import { graphqlCompletionSource, setCompletionSessionContext } from './graphql/completion';
 import { graphqlHoverSource, setHoverSessionContext } from './graphql/hover';
@@ -42,11 +43,37 @@ const explorerPlugin: JupyterFrontEndPlugin<void> = {
 
     // Section widgets — created lazily after connections load
     let schemaTree: SchemaTreeSection | null = null;
-    let typesSearch: TypesSearchSection | null = null;
+    let catalogTree: CatalogTreeSection | null = null;
+    let searchSection: SearchSection | null = null;
     let directivesList: DirectivesListSection | null = null;
+
+    // A type LINK names an exact GraphQL type — including generated ones the
+    // logical-model search does not index — so it opens the introspection
+    // modal directly rather than bouncing through the Search tab to a
+    // guaranteed "Nothing matches".
+    const nav = (typeName: string) => {
+      const client = explorer.getClient();
+      if (client) {
+        showDetailModal(client, typeName, nav);
+      }
+    };
+
+    // Catalog rows and search hits open the same detail views.
+    const openDetail = (target: CatalogOpenTarget) => {
+      const client = explorer.getClient();
+      if (!client) {
+        return;
+      }
+      if (target.view === 'type') {
+        showDetailModal(client, target.name, nav);
+      } else {
+        showCatalogDetailModal(client, target, nav);
+      }
+    };
 
     const initSections = () => {
       const schemaContainer = explorer.getSectionContainer('schema');
+      const catalogContainer = explorer.getSectionContainer('catalog');
       const typesContainer = explorer.getSectionContainer('types');
       const directivesContainer = explorer.getSectionContainer('directives');
 
@@ -54,14 +81,15 @@ const explorerPlugin: JupyterFrontEndPlugin<void> = {
         schemaTree = new SchemaTreeSection(schemaContainer, (typeName: string) => {
           const client = explorer.getClient();
           if (client) {
-            showDetailModal(client, typeName, (nav: string) => explorer.navigateToTypes(nav));
+            showDetailModal(client, typeName, nav);
           }
         });
       }
-      if (typesContainer && !typesSearch) {
-        typesSearch = new TypesSearchSection(typesContainer, (typeName: string) => {
-          explorer.navigateToTypes(typeName);
-        });
+      if (catalogContainer && !catalogTree) {
+        catalogTree = new CatalogTreeSection(catalogContainer, openDetail);
+      }
+      if (typesContainer && !searchSection) {
+        searchSection = new SearchSection(typesContainer, openDetail);
       }
       if (directivesContainer && !directivesList) {
         directivesList = new DirectivesListSection(directivesContainer);
@@ -74,15 +102,16 @@ const explorerPlugin: JupyterFrontEndPlugin<void> = {
       // Ensure sections are initialized (containers exist after first render)
       initSections();
       if (schemaTree) schemaTree.setClient(client);
-      if (typesSearch) typesSearch.setClient(client);
+      if (catalogTree) catalogTree.setClient(client);
+      if (searchSection) searchSection.setClient(client);
       if (directivesList) directivesList.setClient(client);
     }) as EventListener);
 
-    // Listen for types search navigation requests from within the explorer
+    // Listen for search navigation requests from within the explorer
     explorer.node.addEventListener('hugr-types-search', ((e: CustomEvent) => {
       e.stopPropagation(); // prevent document listener from re-triggering
-      if (typesSearch) {
-        typesSearch.setSearchQuery(e.detail.query);
+      if (searchSection) {
+        searchSection.setSearchQuery(e.detail.query);
       }
     }) as EventListener);
 
@@ -93,7 +122,7 @@ const explorerPlugin: JupyterFrontEndPlugin<void> = {
         app.shell.add(explorer, 'right', { rank: 100 });
       }
       app.shell.activateById(explorer.id);
-      if (typesSearch) {
+      if (searchSection) {
         explorer.navigateToTypes(e.detail.query);
       }
     }) as EventListener);
