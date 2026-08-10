@@ -215,7 +215,9 @@ export class HugrClient {
     this._token = options.token;
     this._role = options.role;
     this._connectionName = options.connectionName;
-    this._timeout = options.timeout ?? 10000;
+    // Metadata queries on a large model (a module with thousands of objects,
+    // a _search over 200k entities) legitimately take more than 10s.
+    this._timeout = options.timeout ?? 30000;
   }
 
   /**

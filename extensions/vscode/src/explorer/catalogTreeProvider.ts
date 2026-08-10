@@ -5,27 +5,25 @@
  * filters, aggregations and mutation inputs around the handful of things a
  * user actually came to look at. This view shows the model those were
  * generated FROM — the module tree, the data objects with their relations, the
- * callable functions, and the sources they came from — through the `_catalog`
+ * callable functions, the sources they came from, and the SDL-defined type
+ * definitions (`_types`: source and system scopes) — through the `_catalog`
  * meta queries, which the engine resolves on the metadata path and filters per
- * role.
+ * role. Generated types are deliberately absent: on a 200k-object model they
+ * are the reason `__schema.types` never returns.
  *
  * Every level is one query for one node, issued when the node is opened. The
  * meta queries have a depth budget, so asking for the whole tree at once is
  * both slower and liable to be truncated; asking per node never is.
  *
- * The view title carries a Search action: `_search` is the engine's own ranking
- * over the same model — semantic where the deployment has an embedder,
- * substring matching where it does not, and it says which. Results replace the
- * tree until the search is cleared. Engines older than `_search` do not get the
- * action.
+ * Searching the model is the separate Search view (`_search`), which ranks
+ * over this same model and navigates into the same detail views.
  *
  * Ported from JupyterLab catalogTree.ts — keep the two in step.
  */
 import * as vscode from 'vscode';
 import { HugrClient } from './hugrClient';
-import { kindIconPath, hugrTypeIconPath } from './icons';
-
-export type SearchMatch = 'NAME' | 'MEANING' | 'BOTH';
+import { kindIconPath, hugrTypeIconPath, hugrTypeLabel } from './icons';
+import type { DetailTarget } from './detailPanel';
 
 export type CatalogNodeKind =
   | 'group'
@@ -37,6 +35,8 @@ export type CatalogNodeKind =
   | 'relation'
   | 'query'
   | 'arg'
+  | 'subquery'
+  | 'type'
   | 'message';
 
 export interface CatalogTreeNode {
@@ -50,6 +50,17 @@ export interface CatalogTreeNode {
   typeName?: string;
   /** Dotted module name — a module node's identity, a member's scope. */
   moduleName?: string;
+  /**
+   * What clicking this row opens in the detail panel. A logical-model row
+   * opens its catalog view; rows that only name a GraphQL type (fields, args)
+   * fall back to `typeName` and the introspection view.
+   */
+  open?: DetailTarget;
+  /**
+   * Icon selector: a dataObject row's hugr type ('table' | 'view'), a type
+   * row's GraphQL kind ('OBJECT', 'ENUM', …).
+   */
+  iconHint?: string;
   expandable: boolean;
   children?: CatalogTreeNode[];
   childrenLoaded: boolean;
@@ -81,6 +92,7 @@ const DATA_OBJECT_QUERY = `query($n: String!) {
     moduleName
     dataSourceName
     primaryKey
+    args { name description type { name kind ofType { name kind ofType { name kind } } } }
     queries { name type }
     fields {
       name
@@ -92,17 +104,27 @@ const DATA_OBJECT_QUERY = `query($n: String!) {
   }
 }`;
 
-const SEARCH_QUERY = `query($q: String!, $m: _SearchMatch!) {
-  _search(query: $q, match: $m, limit: 50) {
-    lexical
-    lexicalReason
-    hasMore
-    filteredOut
-    items {
-      kind matchedOn name moduleName dataSourceName description score
-      objectName type hugrType refObjectName
-    }
-  }
+// How a data object's GraphQL fields map back onto the MODEL. The generated
+// type carries much more than the object: relation navigation fields and
+// their aggregation companions (the Relations rows already say that),
+// extra-field sugar (_x_part, _geom_measurement), and subquery entry points.
+// The tree shows the model: own fields, subquery capabilities, relations.
+const SUBQUERY_HUGR_TYPES = new Set(['join', 'function', 'spatial', 'jq', 'h3_data', 'h3_aggregate']);
+const HIDDEN_FIELD_HUGR_TYPES = new Set(['select', 'select_one', 'aggregate', 'bucket_agg', 'extra_field']);
+
+// _QueryType (lowercased) → the hugr icon vocabulary. A query row must not
+// wear the same scalar circle a field does.
+const QUERY_ICON_HINTS: Record<string, string> = {
+  select: 'select',
+  select_one: 'select_one',
+  aggregation: 'aggregate',
+  bucket_aggregation: 'bucket_agg',
+};
+
+// The SDL-defined type definitions of the model — ~100 rows per scope, where
+// the generated surface would be hundreds of thousands.
+const TYPES_SCOPE_QUERY = `query($s: _TypeScope!) {
+  _types(scope: $s) { name kind description hugr_type module }
 }`;
 
 const FUNCTION_QUERY = `query($m: String!, $n: String!) {
@@ -154,28 +176,11 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
   private _client: HugrClient | null = null;
   private _roots: CatalogTreeNode[] = [];
   private _error: string | null = null;
-  /** Non-null while a search is showing instead of the tree. */
-  private _hits: CatalogTreeNode[] | null = null;
-  /**
-   * What a search matches on. Name and meaning are different questions — a
-   * name never enters the vector index, which is built from descriptions — and
-   * BOTH is the default because a user rarely decides in advance which one
-   * they are asking.
-   */
-  private _match: SearchMatch = 'BOTH';
-  /** The last query, so a mode change re-runs it instead of asking again. */
-  private _lastQuery = '';
-  private _searchAvailable = false;
-
-  get searchAvailable(): boolean {
-    return this._searchAvailable;
-  }
 
   setClient(client: HugrClient | null): void {
     this._client = client;
     this._roots = [];
     this._error = null;
-    this._hits = null;
     if (client) {
       void this._loadRoots();
     } else {
@@ -187,12 +192,15 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
     if (this._client) {
       this._roots = [];
       this._error = null;
-      // A refresh reloads the tree, so it must also leave the search: keeping
-      // stale hits over a freshly reloaded model is the one state where the
-      // view would show something the engine no longer says.
-      this._hits = null;
       void this._loadRoots();
     }
+  }
+
+  /** Re-query one node's subtree in place; the rest of the tree stands. */
+  refreshNode(node: CatalogTreeNode): void {
+    node.children = undefined;
+    node.childrenLoaded = false;
+    this._onDidChangeTreeData.fire(node);
   }
 
   // -----------------------------------------------------------------------
@@ -206,6 +214,12 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
         ? vscode.TreeItemCollapsibleState.Collapsed
         : vscode.TreeItemCollapsibleState.None
     );
+
+    // Nodes get FRESH ids on every reload. Without an explicit id VS Code
+    // matches nodes by label and keeps yesterday's expansion state — a
+    // connection reload then looks like nothing happened. New ids collapse
+    // and reset the tree.
+    item.id = element.id;
 
     if (element.detail) {
       item.description = element.detail;
@@ -222,7 +236,13 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
         item.iconPath = new vscode.ThemeIcon('symbol-namespace');
         break;
       case 'dataObject':
-        item.iconPath = hugrTypeIconPath(element.detail === 'view' ? 'view' : 'table');
+        item.iconPath = hugrTypeIconPath(element.iconHint ?? 'table');
+        break;
+      case 'type':
+        item.iconPath = kindIconPath(element.iconHint ?? 'SCALAR');
+        break;
+      case 'subquery':
+        item.iconPath = hugrTypeIconPath(element.iconHint ?? 'join');
         break;
       case 'function':
         item.iconPath = new vscode.ThemeIcon('symbol-method');
@@ -234,7 +254,9 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
         item.iconPath = new vscode.ThemeIcon('references');
         break;
       case 'query':
-        item.iconPath = new vscode.ThemeIcon('play');
+        item.iconPath = element.iconHint
+          ? hugrTypeIconPath(element.iconHint)
+          : new vscode.ThemeIcon('play');
         break;
       case 'message':
         item.iconPath = new vscode.ThemeIcon('warning');
@@ -243,8 +265,22 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
         item.iconPath = kindIconPath('SCALAR');
     }
 
-    // Only rows that name a type can open one.
-    if (element.typeName) {
+    // Modules reload in place (see hugr.refreshCatalogNode) — a 300-module
+    // tree must not be torn down to refresh one branch.
+    if (element.kind === 'module') {
+      item.contextValue = 'hugrCatalogModule';
+    }
+
+    // A logical-model row opens its catalog view; a row that merely names a
+    // GraphQL type opens the introspection view.
+    if (element.open) {
+      item.contextValue = 'hugrCatalogType';
+      item.command = {
+        command: 'hugr.showCatalogDetail',
+        title: 'Show Details',
+        arguments: [element.open],
+      };
+    } else if (element.typeName) {
       item.contextValue = 'hugrCatalogType';
       item.command = {
         command: 'hugr.showTypeDetail',
@@ -264,10 +300,6 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
       if (this._error) {
         return [this._message(this._error)];
       }
-      // A search replaces the tree until it is cleared.
-      if (this._hits !== null) {
-        return this._hits;
-      }
       return this._roots;
     }
     if (!element.expandable) {
@@ -278,10 +310,13 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
     }
     try {
       element.children = await this._fetchChildren(element);
+      element.childrenLoaded = true;
     } catch (err) {
+      // Shown but not CACHED: collapse and re-expand retries the fetch —
+      // which is exactly what a user does after a transient failure.
       element.children = [this._message(err instanceof Error ? err.message : String(err))];
+      element.childrenLoaded = false;
     }
-    element.childrenLoaded = true;
     return element.children ?? [];
   }
 
@@ -295,15 +330,7 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
       // Probe once per connection. The family arrived in v0.3.42, and an
       // engine without it should say so rather than render an empty tree that
       // looks like an empty catalog.
-      const probe = await this._client.query(
-        '{ m: __type(name: "_Module") { name } s: __type(name: "_SearchResult") { name } }'
-      );
-      // _search is newer than the rest of the family: an engine can serve the
-      // tree and not the search.
-      this._searchAvailable = !!probe.data?.s?.name;
-      void vscode.commands.executeCommand(
-        'setContext', 'hugr.catalogSearchAvailable', this._searchAvailable
-      );
+      const probe = await this._client.query('{ m: __type(name: "_Module") { name } }');
       if (!probe.data?.m?.name) {
         this._error =
           'This engine does not serve the logical-model catalog (_catalog). ' +
@@ -336,6 +363,22 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
         expandable: true,
         childrenLoaded: false,
       },
+      // The SDL-defined type definitions. Two scopes, both lazy — each is one
+      // ~100-row metadata query, nothing like the generated surface.
+      {
+        id: nextId(),
+        kind: 'group',
+        label: 'Model Types',
+        expandable: true,
+        childrenLoaded: false,
+      },
+      {
+        id: nextId(),
+        kind: 'group',
+        label: 'System Types',
+        expandable: true,
+        childrenLoaded: false,
+      },
     ];
     this._onDidChangeTreeData.fire(undefined);
   }
@@ -353,6 +396,29 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
         label: s.name,
         detail: s.engine || '',
         description: this._sourceDescription(s),
+        open: { view: 'dataSource' as const, name: s.name },
+        expandable: false,
+        childrenLoaded: true,
+      }));
+    }
+
+    if (node.kind === 'group' && (node.label === 'Model Types' || node.label === 'System Types')) {
+      const scope = node.label === 'Model Types' ? 'SOURCE' : 'SYSTEM';
+      const resp = await client.query(TYPES_SCOPE_QUERY, { s: scope });
+      this._throwOnErrors(resp);
+      const types: any[] = (resp.data?._types ?? [])
+        .filter((t: any) => t.name && !t.name.startsWith('__'))
+        .sort((a: any, b: any) => String(a.name).localeCompare(String(b.name)));
+      return types.map(t => ({
+        id: nextId(),
+        kind: 'type' as const,
+        label: t.name,
+        detail: [t.kind ? t.kind.toLowerCase() : '', t.module ? `in ${t.module}` : '']
+          .filter(Boolean)
+          .join('  '),
+        description: t.description || '',
+        typeName: t.name,
+        iconHint: t.kind || undefined,
         expandable: false,
         childrenLoaded: true,
       }));
@@ -384,6 +450,8 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
           description: o.description || '',
           typeName: o.name,
           moduleName: o.moduleName ?? '',
+          open: { view: 'dataObject', name: o.name },
+          iconHint: (o.type || 'TABLE').toLowerCase(),
           expandable: true,
           childrenLoaded: false,
         });
@@ -396,6 +464,7 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
           detail: (f.type || '').toLowerCase(),
           description: f.description || '',
           moduleName: f.moduleName ?? '',
+          open: { view: 'function', name: f.name, module: f.moduleName ?? node.moduleName ?? '' },
           expandable: true,
           childrenLoaded: false,
         });
@@ -415,16 +484,48 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
       // from the type name — the type carries the source prefix, the query
       // does not.
       for (const q of obj.queries ?? []) {
+        const qt = (q.type || '').toLowerCase();
         out.push({
           id: nextId(),
           kind: 'query',
           label: q.name,
-          detail: (q.type || '').toLowerCase(),
+          detail: qt,
+          iconHint: QUERY_ICON_HINTS[qt],
           expandable: false,
           childrenLoaded: true,
         });
       }
+      // Parameterized-view arguments; null when the object takes none.
+      for (const a of obj.args ?? []) {
+        out.push({
+          id: nextId(),
+          kind: 'arg',
+          label: a.name,
+          detail: typeLabel(a.type),
+          description: a.description || '',
+          typeName: namedType(a.type),
+          expandable: false,
+          childrenLoaded: true,
+        });
+      }
+      const subqueries: CatalogTreeNode[] = [];
       for (const f of obj.fields ?? []) {
+        const ht = f.hugr_type || '';
+        if (HIDDEN_FIELD_HUGR_TYPES.has(ht)) continue;
+        if (SUBQUERY_HUGR_TYPES.has(ht)) {
+          subqueries.push({
+            id: nextId(),
+            kind: 'subquery',
+            label: f.name,
+            detail: hugrTypeLabel(ht).toLowerCase(),
+            description: f.description || '',
+            typeName: namedType(f.type),
+            iconHint: ht,
+            expandable: false,
+            childrenLoaded: true,
+          });
+          continue;
+        }
         out.push({
           id: nextId(),
           kind: 'field',
@@ -436,6 +537,7 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
           childrenLoaded: true,
         });
       }
+      out.push(...subqueries);
       for (const r of obj.relations ?? []) {
         const far = r.dataObject?.name;
         out.push({
@@ -443,7 +545,7 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
           kind: 'relation',
           label: r.fieldName || r.name,
           detail: `${(r.kind || '').toLowerCase()} → ${far ?? '?'}`,
-          typeName: far,
+          open: far ? { view: 'dataObject', name: far } : undefined,
           expandable: false,
           childrenLoaded: true,
         });
@@ -485,107 +587,6 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<CatalogTreeN
     }
 
     return [];
-  }
-
-  /**
-   * Run `_search` and show its hits instead of the tree.
-   *
-   * The note row is not decoration: without a vector index the ranking is
-   * substring matching and every word of the query has to appear, so "customer
-   * orders" finds nothing a semantic ranking would have found. filteredOut
-   * says the deployment holds matches this role may not see.
-   */
-  get match(): SearchMatch {
-    return this._match;
-  }
-
-  /** Change the track and re-run the last query, if there was one. */
-  async setMatch(match: SearchMatch): Promise<void> {
-    this._match = match;
-    if (this._lastQuery) {
-      await this.search(this._lastQuery);
-    }
-  }
-
-  async search(query: string): Promise<void> {
-    if (!this._client || !query.trim()) {
-      this.clearSearch();
-      return;
-    }
-    this._lastQuery = query.trim();
-    try {
-      const resp = await this._client.query(SEARCH_QUERY, { q: query.trim(), m: this._match });
-      this._throwOnErrors(resp);
-      const page = resp.data?._search;
-      const hits: CatalogTreeNode[] = (page?.items ?? []).map((h: any) => {
-        // A field hit is only actionable through its owner, so that is what
-        // the row names and what clicking it opens.
-        const isField = h.kind === 'FIELD';
-        const detail = [
-          isField ? h.type : '',
-          h.moduleName ? `in ${h.moduleName}` : '',
-          h.refObjectName ? `→ ${h.refObjectName}` : '',
-        ]
-          .filter(Boolean)
-          .join('  ');
-        return {
-          id: nextId(),
-          kind: isField ? ('field' as const) : this._hitKind(h.kind),
-          label: isField ? `${h.objectName}.${h.name}` : h.name,
-          // Mark which track found it. An exact name and an embedding distance
-          // are not on one scale, so a name hit is not "better" than a meaning
-          // hit — it is an answer to a different question.
-          detail: h.matchedOn === 'NAME' ? [detail, '(name)'].filter(Boolean).join('  ') : detail,
-          description: h.description || '',
-          typeName: isField ? h.objectName : h.name,
-          expandable: false,
-          childrenLoaded: true,
-        };
-      });
-      const note = this._noteFor(page);
-      this._hits = note ? [this._message(note), ...hits] : hits;
-      if (hits.length === 0) {
-        this._hits.push(this._message('Nothing matches'));
-      }
-    } catch (err) {
-      this._hits = [this._message(err instanceof Error ? err.message : String(err))];
-    }
-    this._onDidChangeTreeData.fire(undefined);
-  }
-
-  clearSearch(): void {
-    this._hits = null;
-    this._lastQuery = '';
-    this._onDidChangeTreeData.fire(undefined);
-  }
-
-  private _hitKind(kind: string): CatalogNodeKind {
-    switch (kind) {
-      case 'MODULE':
-        return 'module';
-      case 'DATA_OBJECT':
-        return 'dataObject';
-      case 'FUNCTION':
-        return 'function';
-      case 'DATA_SOURCE':
-        return 'dataSource';
-      default:
-        return 'field';
-    }
-  }
-
-  private _noteFor(page: any): string {
-    if (!page) return '';
-    const bits: string[] = [
-      this._match === 'BOTH' ? 'matching names and meaning' :
-        this._match === 'NAME' ? 'matching names only' : 'matching meaning only',
-    ];
-    if (this._match !== 'NAME' && page.lexical) {
-      bits.push('no vector index — substring matching, every word must appear');
-    }
-    if (page.filteredOut > 0) bits.push(`${page.filteredOut} hidden from you`);
-    if (page.hasMore) bits.push('more matches exist — narrow the query');
-    return bits.join(' · ');
   }
 
   private _sourceDescription(s: any): string {

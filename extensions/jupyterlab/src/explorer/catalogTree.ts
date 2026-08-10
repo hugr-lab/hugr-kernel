@@ -5,26 +5,34 @@
  * filters, aggregations and mutation inputs around the handful of things a
  * user actually came to look at. This tab shows the model those were generated
  * FROM — the module tree, the data objects with their relations, the callable
- * functions, and the sources they came from — through the `_catalog` meta
- * queries, which the engine resolves on the metadata path and filters per role.
+ * functions, the sources they came from, and the SDL-defined type definitions
+ * (`_types`: source and system scopes) — through the `_catalog` meta queries,
+ * which the engine resolves on the metadata path and filters per role.
+ * Generated types are deliberately absent: on a 200k-object model they are the
+ * reason `__schema.types` never returns.
  *
- * Every level is one query for one node, issued when the node is opened. The
- * meta queries have a depth budget, so asking for the whole tree at once is
- * both slower and liable to be truncated; asking per node never is.
+ * Every level is one query for one node, issued when the node is opened —
+ * including the roots: nothing at all is fetched until a group is expanded.
+ * The meta queries have a depth budget, so asking for the whole tree at once
+ * is both slower and liable to be truncated; asking per node never is.
  *
- * The search box on top is `_search`, the engine's own ranking over the same
- * model: semantic where the deployment has an embedder, substring matching
- * where it does not, and it says which. Results replace the tree while a query
- * is present and the tree comes back when it is cleared — one tab, two ways
- * into one model. Engines older than `_search` simply do not get the box.
+ * Searching the model is the separate Search tab (`_search`), which ranks
+ * over this same model and navigates into the same detail views.
  */
 
 import { HugrClient } from '../hugrClient';
 import { kindIcon, hugrTypeIcon } from './icons';
+import type { CatalogDetailTarget } from './detailModal';
 
 // ---------------------------------------------------------------------------
 // Node model
 // ---------------------------------------------------------------------------
+
+/**
+ * What a row opens on click: a catalog entity's logical view, or — for rows
+ * that merely name a GraphQL type (fields, args) — the introspection view.
+ */
+export type CatalogOpenTarget = { view: 'type'; name: string } | CatalogDetailTarget;
 
 export type CatalogNodeKind =
   | 'group'
@@ -35,7 +43,9 @@ export type CatalogNodeKind =
   | 'field'
   | 'relation'
   | 'query'
-  | 'arg';
+  | 'arg'
+  | 'subquery'
+  | 'type';
 
 export interface CatalogTreeNode {
   id: string;
@@ -49,27 +59,17 @@ export interface CatalogTreeNode {
   typeName?: string;
   /** Dotted module name — the identity of a module node, and the scope of a member. */
   moduleName?: string;
+  /** The catalog view this row opens; takes precedence over `typeName`. */
+  open?: CatalogOpenTarget;
+  /** Icon selector for `type` rows: the GraphQL kind ('OBJECT', 'ENUM', …). */
+  iconHint?: string;
+  /** Last children fetch failed — the next expand retries instead of caching. */
+  loadFailed?: boolean;
   expandable: boolean;
   expanded: boolean;
   children: CatalogTreeNode[] | null;
   loading: boolean;
   depth: number;
-}
-
-type SearchMatch = 'NAME' | 'MEANING' | 'BOTH';
-
-interface SearchHit {
-  kind: string;
-  matchedOn: SearchMatch;
-  name: string;
-  moduleName: string;
-  dataSourceName?: string;
-  description?: string;
-  score: number;
-  objectName?: string;
-  type?: string;
-  hugrType?: string;
-  refObjectName?: string;
 }
 
 let _nextId = 0;
@@ -103,6 +103,7 @@ const DATA_OBJECT_QUERY = `query($n: String!) {
     moduleName
     dataSourceName
     primaryKey
+    args { name description type { name kind ofType { name kind ofType { name kind } } } }
     queries { name type }
     fields {
       name
@@ -114,17 +115,27 @@ const DATA_OBJECT_QUERY = `query($n: String!) {
   }
 }`;
 
-const SEARCH_QUERY = `query($q: String!, $m: _SearchMatch!) {
-  _search(query: $q, match: $m, limit: 50) {
-    lexical
-    lexicalReason
-    hasMore
-    filteredOut
-    items {
-      kind matchedOn name moduleName dataSourceName description score
-      objectName type hugrType refObjectName
-    }
-  }
+// How a data object's GraphQL fields map back onto the MODEL. The generated
+// type carries much more than the object: relation navigation fields and
+// their aggregation companions (the Relations rows already say that),
+// extra-field sugar (_x_part, _geom_measurement), and subquery entry points.
+// The tree shows the model: own fields, subquery capabilities, relations.
+const SUBQUERY_HUGR_TYPES = new Set(['join', 'function', 'spatial', 'jq', 'h3_data', 'h3_aggregate']);
+const HIDDEN_FIELD_HUGR_TYPES = new Set(['select', 'select_one', 'aggregate', 'bucket_agg', 'extra_field']);
+
+// _QueryType (lowercased) → the hugr icon vocabulary. A query row must not
+// wear the same scalar circle a field does.
+const QUERY_ICON_HINTS: Record<string, string> = {
+  select: 'select',
+  select_one: 'select_one',
+  aggregation: 'aggregate',
+  bucket_aggregation: 'bucket_agg',
+};
+
+// The SDL-defined type definitions of the model — ~100 rows per scope, where
+// the generated surface would be hundreds of thousands.
+const TYPES_SCOPE_QUERY = `query($s: _TypeScope!) {
+  _types(scope: $s) { name kind description hugr_type module }
 }`;
 
 const FUNCTION_QUERY = `query($m: String!, $n: String!) {
@@ -174,29 +185,14 @@ function namedType(t: any): string | undefined {
 
 export class CatalogTreeSection {
   private _container: HTMLElement;
-  private _onShowDetail: (typeName: string) => void;
+  private _onShowDetail: (target: CatalogOpenTarget) => void;
   private _client: HugrClient | null = null;
   private _roots: CatalogTreeNode[] = [];
   private _error: string | null = null;
-  /** Null until probed; false on an engine older than _search. */
-  private _searchAvailable: boolean | null = null;
-
-  // Search state. An empty query means "show the tree".
-  private _query = '';
-  // Name and meaning are different questions — see the mode select. BOTH is
-  // the default because a user rarely decides in advance which one they are
-  // asking.
-  private _match: SearchMatch = 'BOTH';
-  private _hits: SearchHit[] | null = null;
-  private _searching = false;
-  private _searchNote = '';
-  private _searchVersion = 0;
-  private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  private _searchInput: HTMLInputElement | null = null;
-  /** Everything below the search box; the only part a keystroke redraws. */
+  /** The tree body — the part a toggle redraws. */
   private _body: HTMLElement | null = null;
 
-  constructor(container: HTMLElement, onShowDetail: (typeName: string) => void) {
+  constructor(container: HTMLElement, onShowDetail: (target: CatalogOpenTarget) => void) {
     this._container = container;
     this._onShowDetail = onShowDetail;
   }
@@ -205,10 +201,6 @@ export class CatalogTreeSection {
     this._client = client;
     this._roots = [];
     this._error = null;
-    this._searchAvailable = null;
-    this._query = '';
-    this._hits = null;
-    this._searchNote = '';
     this._render();
     if (client) {
       void this._load();
@@ -217,7 +209,6 @@ export class CatalogTreeSection {
 
   refresh(): void {
     if (this._client) {
-      this._searchAvailable = null;
       void this._load();
     }
   }
@@ -234,12 +225,7 @@ export class CatalogTreeSection {
       // Probe once per connection. The family arrived in v0.3.42, and an
       // engine without it should say so rather than render an empty tree that
       // looks like an empty catalog.
-      const probe = await this._client.query(
-        '{ m: __type(name: "_Module") { name } s: __type(name: "_SearchResult") { name } }'
-      );
-      // _search is newer than the rest of the family: an engine can serve the
-      // tree and not the search, and then the box has no business being there.
-      this._searchAvailable = !!probe.data?.s?.name;
+      const probe = await this._client.query('{ m: __type(name: "_Module") { name } }');
       if (!probe.data?.m?.name) {
         this._error =
           'This engine does not serve the logical-model catalog (_catalog). ' +
@@ -254,13 +240,15 @@ export class CatalogTreeSection {
     }
 
     this._error = null;
+    // Everything is collapsed and empty until clicked — on a 300-module
+    // deployment even the root module listing is a query worth deferring.
     this._roots = [
       {
         id: nextId(),
         kind: 'group',
         label: 'Modules',
         expandable: true,
-        expanded: true,
+        expanded: false,
         children: null,
         loading: false,
         depth: 0,
@@ -276,10 +264,30 @@ export class CatalogTreeSection {
         loading: false,
         depth: 0,
       },
+      // The SDL-defined type definitions. Two scopes, both lazy — each is one
+      // ~100-row metadata query, nothing like the generated surface.
+      {
+        id: nextId(),
+        kind: 'group',
+        label: 'Model Types',
+        expandable: true,
+        expanded: false,
+        children: null,
+        loading: false,
+        depth: 0,
+      },
+      {
+        id: nextId(),
+        kind: 'group',
+        label: 'System Types',
+        expandable: true,
+        expanded: false,
+        children: null,
+        loading: false,
+        depth: 0,
+      },
     ];
     this._render();
-    // The module tree opens expanded: it is the reason to be on this tab.
-    void this._loadChildren(this._roots[0]);
   }
 
   private async _loadChildren(node: CatalogTreeNode): Promise<void> {
@@ -290,7 +298,10 @@ export class CatalogTreeSection {
     this._renderBody();
     try {
       node.children = await this._fetchChildren(node);
+      node.loadFailed = false;
     } catch (err) {
+      // Shown but not CACHED: collapse and re-expand retries the fetch.
+      node.loadFailed = true;
       node.children = [
         {
           id: nextId(),
@@ -322,6 +333,32 @@ export class CatalogTreeSection {
         label: s.name,
         detail: s.engine || '',
         description: this._sourceDescription(s),
+        open: { view: 'dataSource' as const, name: s.name },
+        expandable: false,
+        expanded: false,
+        children: null,
+        loading: false,
+        depth,
+      }));
+    }
+
+    if (node.kind === 'group' && (node.label === 'Model Types' || node.label === 'System Types')) {
+      const scope = node.label === 'Model Types' ? 'SOURCE' : 'SYSTEM';
+      const resp = await client.query(TYPES_SCOPE_QUERY, { s: scope });
+      this._throwOnErrors(resp);
+      const types: any[] = (resp.data?._types ?? [])
+        .filter((t: any) => t.name && !t.name.startsWith('__'))
+        .sort((a: any, b: any) => String(a.name).localeCompare(String(b.name)));
+      return types.map(t => ({
+        id: nextId(),
+        kind: 'type' as const,
+        label: t.name,
+        detail: [t.kind ? String(t.kind).toLowerCase() : '', t.module ? `in ${t.module}` : '']
+          .filter(Boolean)
+          .join('  '),
+        description: t.description || '',
+        typeName: t.name,
+        iconHint: t.kind || undefined,
         expandable: false,
         expanded: false,
         children: null,
@@ -362,6 +399,7 @@ export class CatalogTreeSection {
           description: o.description || '',
           typeName: o.name,
           moduleName: o.moduleName ?? '',
+          open: { view: 'dataObject', name: o.name },
           expandable: true,
           expanded: false,
           children: null,
@@ -377,6 +415,7 @@ export class CatalogTreeSection {
           detail: (f.type || '').toLowerCase(),
           description: f.description || '',
           moduleName: f.moduleName ?? '',
+          open: { view: 'function', name: f.name, module: f.moduleName ?? node.moduleName ?? '' },
           expandable: true,
           expanded: false,
           children: null,
@@ -401,11 +440,13 @@ export class CatalogTreeSection {
       // from the type name — the type carries the source prefix, the query
       // does not.
       for (const q of obj.queries ?? []) {
+        const qt = (q.type || '').toLowerCase();
         out.push({
           id: nextId(),
           kind: 'query',
           label: q.name,
-          detail: (q.type || '').toLowerCase(),
+          detail: qt,
+          iconHint: QUERY_ICON_HINTS[qt],
           expandable: false,
           expanded: false,
           children: null,
@@ -413,7 +454,45 @@ export class CatalogTreeSection {
           depth,
         });
       }
+      // Parameterized-view arguments; null when the object takes none.
+      for (const a of obj.args ?? []) {
+        out.push({
+          id: nextId(),
+          kind: 'arg',
+          label: a.name,
+          detail: typeLabel(a.type),
+          description: a.description || '',
+          typeName: namedType(a.type),
+          expandable: false,
+          expanded: false,
+          children: null,
+          loading: false,
+          depth,
+        });
+      }
+      const subqueries: CatalogTreeNode[] = [];
       for (const f of obj.fields ?? []) {
+        const ht = f.hugr_type || '';
+        if (HIDDEN_FIELD_HUGR_TYPES.has(ht)) {
+          continue;
+        }
+        if (SUBQUERY_HUGR_TYPES.has(ht)) {
+          subqueries.push({
+            id: nextId(),
+            kind: 'subquery',
+            label: f.name,
+            detail: ht,
+            description: f.description || '',
+            typeName: namedType(f.type),
+            iconHint: ht,
+            expandable: false,
+            expanded: false,
+            children: null,
+            loading: false,
+            depth,
+          });
+          continue;
+        }
         const named = namedType(f.type);
         out.push({
           id: nextId(),
@@ -429,6 +508,7 @@ export class CatalogTreeSection {
           depth,
         });
       }
+      out.push(...subqueries);
       for (const r of obj.relations ?? []) {
         const far = r.dataObject?.name;
         out.push({
@@ -437,7 +517,7 @@ export class CatalogTreeSection {
           label: r.fieldName || r.name,
           detail: `${(r.kind || '').toLowerCase()} → ${far ?? '?'}`,
           description: r.description || '',
-          typeName: far,
+          open: far ? { view: 'dataObject', name: far } : undefined,
           expandable: false,
           expanded: false,
           children: null,
@@ -524,14 +604,7 @@ export class CatalogTreeSection {
   // Render
   // -----------------------------------------------------------------------
 
-  /**
-   * Rebuild the whole section: the search box, then the body.
-   *
-   * Called when the CONNECTION changes, never on a keystroke — the search box
-   * is a live DOM node the user is typing into, and re-creating it mid-word
-   * moves the caret. Everything that changes while typing goes through
-   * _renderBody, which replaces only what is below the box.
-   */
+  /** Rebuild the section. Called when the CONNECTION changes. */
   private _render(): void {
     this._container.innerHTML = '';
     this._body = null;
@@ -547,10 +620,6 @@ export class CatalogTreeSection {
       return;
     }
 
-    if (this._searchAvailable) {
-      this._container.appendChild(this._searchBox());
-    }
-
     const body = document.createElement('div');
     this._body = body;
     this._container.appendChild(body);
@@ -564,13 +633,6 @@ export class CatalogTreeSection {
     }
     body.innerHTML = '';
 
-    // A query in the box replaces the tree; clearing it brings the tree back
-    // with every node still open where the user left it.
-    if (this._query.trim()) {
-      body.appendChild(this._renderHits());
-      return;
-    }
-
     if (this._roots.length === 0) {
       body.appendChild(this._status('Loading…'));
       return;
@@ -582,246 +644,6 @@ export class CatalogTreeSection {
     }
     body.appendChild(fragment);
   }
-
-  private _searchBox(): HTMLElement {
-    const wrap = document.createElement('div');
-    wrap.style.cssText = 'padding:4px;display:flex;gap:4px;align-items:center;';
-
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.placeholder = 'Search the model by meaning…';
-    input.value = this._query;
-    input.style.cssText = 'flex:1;min-width:0;';
-    input.addEventListener('input', () => {
-      const hadQuery = this._query.trim() !== '';
-      this._query = input.value;
-      if (this._query.trim() === '') {
-        // Emptying the box is not a search — go straight back to the tree.
-        this._hits = null;
-        this._searchNote = '';
-        this._renderBody();
-        return;
-      }
-      if (!hadQuery) {
-        // First character: swap the tree out for the pending state now, so the
-        // panel does not sit on a stale tree until the debounce fires.
-        this._renderBody();
-      }
-      this._debouncedSearch();
-    });
-    this._searchInput = input;
-    wrap.appendChild(input);
-
-    const mode = document.createElement('select');
-    mode.title =
-      'What to match on. A name never enters the vector index — that is built ' +
-      'from descriptions — so an identifier is only findable by name.';
-    mode.style.cssText = 'flex:none;';
-    for (const [value, label] of [
-      ['BOTH', 'name + meaning'],
-      ['NAME', 'name'],
-      ['MEANING', 'meaning'],
-    ] as Array<[SearchMatch, string]>) {
-      const opt = document.createElement('option');
-      opt.value = value;
-      opt.textContent = label;
-      opt.selected = value === this._match;
-      mode.appendChild(opt);
-    }
-    mode.addEventListener('change', () => {
-      this._match = mode.value as SearchMatch;
-      if (this._query.trim()) {
-        this._hits = null;
-        void this._runSearch();
-      }
-    });
-    wrap.appendChild(mode);
-
-    const clear = document.createElement('button');
-    clear.textContent = '×';
-    clear.title = 'Back to the tree';
-    clear.style.cssText = 'flex:none;cursor:pointer;';
-    clear.addEventListener('click', () => {
-      this._query = '';
-      input.value = '';
-      this._hits = null;
-      this._searchNote = '';
-      this._renderBody();
-    });
-    wrap.appendChild(clear);
-
-    return wrap;
-  }
-
-  private _renderHits(): HTMLElement {
-    const box = document.createElement('div');
-
-    if (this._hits === null) {
-      // Typed, but the debounce has not fired yet — or the first search is
-      // still in flight. Either way nothing has been ANSWERED, and saying
-      // "nothing matches" here would be a lie the user acts on.
-      box.appendChild(this._status('Searching…'));
-      return box;
-    }
-    if (this._searchNote) {
-      const note = this._status(this._searchNote);
-      note.style.fontStyle = 'italic';
-      box.appendChild(note);
-    }
-    const hits = this._hits ?? [];
-    if (hits.length === 0 && !this._searching) {
-      box.appendChild(this._status('Nothing matches'));
-      return box;
-    }
-
-    for (const hit of hits) {
-      box.appendChild(this._hitRow(hit));
-    }
-    return box;
-  }
-
-  private _hitRow(hit: SearchHit): HTMLElement {
-    const row = document.createElement('div');
-    row.className = 'hugr-schema-tree-row';
-    row.style.cssText =
-      'display:flex;align-items:center;gap:6px;padding:3px 6px;font-size:12px;white-space:nowrap;';
-
-    const icon = document.createElement('span');
-    icon.style.cssText = 'flex:none;display:inline-flex;';
-    icon.innerHTML = this._hitIcon(hit);
-    row.appendChild(icon);
-
-    // A field hit is only actionable through its owner, so that is what the
-    // row names and what clicking it opens.
-    const target = hit.kind === 'FIELD' ? hit.objectName : hit.name;
-    const label = document.createElement('span');
-    label.textContent =
-      hit.kind === 'FIELD' ? `${hit.objectName}.${hit.name}` : hit.name;
-    label.style.cssText = 'font-weight:500;';
-    if (target) {
-      label.style.cursor = 'pointer';
-      label.addEventListener('click', () => this._onShowDetail(target));
-    }
-    row.appendChild(label);
-
-    // Which track found it. Worth showing: an exact name and an embedding
-    // distance are not on one scale, so a NAME hit at 1.0 and a MEANING hit at
-    // 0.6 are not "better" and "worse", they are answers to different
-    // questions.
-    if (hit.matchedOn === 'NAME') {
-      const badge = document.createElement('span');
-      badge.textContent = 'name';
-      badge.style.cssText =
-        'flex:none;font-size:10px;padding:0 4px;border-radius:3px;' +
-        'background:var(--jp-brand-color3, #dbeafe);color:var(--jp-brand-color1, #1d4ed8);';
-      row.appendChild(badge);
-    }
-
-    const meta = document.createElement('span');
-    const bits = [
-      hit.kind === 'FIELD' ? hit.type : '',
-      hit.moduleName ? `in ${hit.moduleName}` : '',
-      hit.refObjectName ? `→ ${hit.refObjectName}` : '',
-    ].filter(Boolean);
-    meta.textContent = bits.join('  ');
-    meta.style.cssText = 'color:var(--jp-ui-font-color2, #888);font-size:11px;';
-    row.appendChild(meta);
-
-    if (hit.description) {
-      const desc = document.createElement('span');
-      desc.textContent = hit.description;
-      desc.title = hit.description;
-      desc.style.cssText =
-        'color:var(--jp-ui-font-color2, #888);font-size:11px;' +
-        'overflow:hidden;text-overflow:ellipsis;';
-      row.appendChild(desc);
-    }
-
-    return row;
-  }
-
-  private _hitIcon(hit: SearchHit): string {
-    switch (hit.kind) {
-      case 'MODULE':
-        return hugrTypeIcon('module');
-      case 'DATA_OBJECT':
-        return hugrTypeIcon('table');
-      case 'FUNCTION':
-        return hugrTypeIcon('function');
-      case 'DATA_SOURCE':
-        return kindIcon('OBJECT');
-      default:
-        return kindIcon('SCALAR');
-    }
-  }
-
-  private _debouncedSearch(): void {
-    if (this._debounceTimer !== null) {
-      clearTimeout(this._debounceTimer);
-    }
-    this._debounceTimer = setTimeout(() => {
-      this._debounceTimer = null;
-      void this._runSearch();
-    }, 300);
-  }
-
-  private async _runSearch(): Promise<void> {
-    const query = this._query.trim();
-    if (!this._client || !query) {
-      this._hits = null;
-      this._searchNote = '';
-      this._renderBody();
-      return;
-    }
-    const version = ++this._searchVersion;
-    this._searching = true;
-    this._renderBody();
-
-    try {
-      const resp = await this._client.query(SEARCH_QUERY, { q: query, m: this._match });
-      this._throwOnErrors(resp);
-      if (version !== this._searchVersion) {
-        return;
-      }
-      const page = resp.data?._search;
-      this._hits = page?.items ?? [];
-      this._searchNote = this._noteFor(page);
-    } catch (err) {
-      if (version !== this._searchVersion) {
-        return;
-      }
-      this._hits = [];
-      this._searchNote = err instanceof Error ? err.message : String(err);
-    }
-    this._searching = false;
-    this._renderBody();
-  }
-
-  /**
-   * What the page says about itself. `lexical` is the one an agent-free human
-   * still needs: without a vector index the ranking is substring matching and
-   * every word has to appear, so "customer orders" finds nothing that a
-   * semantic ranking would have found.
-   */
-  private _noteFor(page: any): string {
-    if (!page) {
-      return '';
-    }
-    const bits: string[] = [];
-    if (this._match === 'NAME') {
-      bits.push('matching names only');
-    } else if (page.lexical) {
-      bits.push('no vector index — substring matching, every word must appear');
-    }
-    if (page.filteredOut > 0) {
-      bits.push(`${page.filteredOut} hidden from you`);
-    }
-    if (page.hasMore) {
-      bits.push('more matches exist — narrow the query');
-    }
-    return bits.join(' · ');
-  }
-
   private _status(text: string): HTMLElement {
     const div = document.createElement('div');
     div.style.cssText =
@@ -880,11 +702,51 @@ export class CatalogTreeSection {
     if (node.expandable) {
       label.style.cursor = 'pointer';
       label.addEventListener('click', () => void this._toggle(node));
+    } else if (node.open) {
+      label.style.cursor = 'pointer';
+      label.addEventListener('click', () => this._onShowDetail(node.open!));
     } else if (node.typeName) {
       label.style.cursor = 'pointer';
-      label.addEventListener('click', () => this._onShowDetail(node.typeName!));
+      label.addEventListener('click', () =>
+        this._onShowDetail({ view: 'type', name: node.typeName! })
+      );
     }
     row.appendChild(label);
+
+    // Expansion owns the label click on expandable rows (data objects,
+    // functions), so their catalog view hangs off an explicit affordance.
+    if (node.expandable && node.open) {
+      const info = document.createElement('span');
+      info.textContent = 'ⓘ';
+      info.title = 'Details';
+      info.style.cssText =
+        'flex:none;cursor:pointer;font-size:11px;color:var(--jp-ui-font-color2, #888);';
+      info.addEventListener('click', e => {
+        e.stopPropagation();
+        this._onShowDetail(node.open!);
+      });
+      row.appendChild(info);
+    }
+
+    // A module reloads in place — a 300-module tree must not be torn down to
+    // refresh one branch.
+    if (node.kind === 'module' || node.kind === 'group') {
+      const reload = document.createElement('span');
+      reload.textContent = '↻';
+      reload.title = 'Reload';
+      reload.style.cssText =
+        'flex:none;cursor:pointer;font-size:11px;color:var(--jp-ui-font-color2, #888);';
+      reload.addEventListener('click', e => {
+        e.stopPropagation();
+        node.children = null;
+        if (node.expanded) {
+          void this._loadChildren(node);
+        } else {
+          this._renderBody();
+        }
+      });
+      row.appendChild(reload);
+    }
 
     if (node.detail) {
       const detail = document.createElement('span');
@@ -923,6 +785,12 @@ export class CatalogTreeSection {
         return kindIcon('OBJECT');
       case 'relation':
         return kindIcon('INTERFACE');
+      case 'type':
+        return kindIcon(node.iconHint || 'SCALAR');
+      case 'subquery':
+        return hugrTypeIcon(node.iconHint || 'join');
+      case 'query':
+        return hugrTypeIcon(node.iconHint || 'select');
       default:
         return kindIcon('SCALAR');
     }
@@ -933,7 +801,9 @@ export class CatalogTreeSection {
       return;
     }
     node.expanded = !node.expanded;
-    if (node.expanded && node.children === null) {
+    if (node.expanded && (node.children === null || node.loadFailed)) {
+      node.loadFailed = false;
+      node.children = null;
       await this._loadChildren(node);
       return;
     }

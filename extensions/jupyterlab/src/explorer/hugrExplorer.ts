@@ -216,7 +216,7 @@ export class HugrExplorerWidget extends Widget {
     const sections: { key: SectionName; label: string }[] = [
       { key: 'schema', label: 'Schema' },
       { key: 'catalog', label: 'Catalog' },
-      { key: 'types', label: 'Types' },
+      { key: 'types', label: 'Search' },
       { key: 'directives', label: 'Directives' }
     ];
 

@@ -36,7 +36,12 @@ def _load_config() -> dict:
 def _save_config(cfg: dict) -> None:
     p = _config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(cfg, indent=2) + "\n")
+    # Write-to-temp + rename: several processes share this file (kernel,
+    # VS Code, this service), and a torn read on their side can end with a
+    # deleted connection list.
+    tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(cfg, indent=2) + "\n")
+    tmp.replace(p)
 
 
 def _find_connection(cfg: dict, name: str):

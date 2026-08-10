@@ -73,10 +73,25 @@ class LoginSession {
     this._onSessionChange = onSessionChange;
   }
 
+  /** In-flight refresh, so a burst of requests near expiry refreshes once. */
+  private _refreshing: Promise<boolean> | null = null;
+  /** Consecutive transient refresh failures; resets on success. */
+  private _retryCount = 0;
+
+  /**
+   * Whether this session is still the REGISTERED one. Logout removes the
+   * session from the registry but cannot cancel a refresh already in flight —
+   * a detached session must never persist tokens or schedule retries, or a
+   * completed refresh resurrects exactly what logout wiped.
+   */
+  private get _active(): boolean {
+    return _sessions.get(this.connectionName) === this;
+  }
+
   startRefreshTimer(): void {
     this.cancelRefreshTimer();
     const delay = Math.max((this.expiresAt - Date.now() / 1000) - 30, 1) * 1000;
-    this._refreshTimer = setTimeout(() => this._doRefresh(), delay);
+    this._refreshTimer = setTimeout(() => void this.refreshNow(), delay);
   }
 
   cancelRefreshTimer(): void {
@@ -86,9 +101,22 @@ class LoginSession {
     }
   }
 
-  private async _doRefresh(): Promise<void> {
-    this._refreshTimer = null;
-    if (!this.refreshToken || !this.tokenEndpoint) return;
+  /**
+   * Refresh the access token, deduplicated: the proactive timer and any number
+   * of concurrent per-request callers share one round-trip.
+   */
+  refreshNow(): Promise<boolean> {
+    if (!this._refreshing) {
+      this._refreshing = this._doRefresh().finally(() => {
+        this._refreshing = null;
+      });
+    }
+    return this._refreshing;
+  }
+
+  private async _doRefresh(): Promise<boolean> {
+    this.cancelRefreshTimer();
+    if (!this._active || !this.refreshToken || !this.tokenEndpoint) return false;
 
     try {
       const tokens = await postForm(this.tokenEndpoint, {
@@ -97,6 +125,10 @@ class LoginSession {
         client_id: this.clientId,
       }, 10000, this.tlsSkipVerify);
 
+      // Logout may have detached this session during the round-trip.
+      if (!this._active) return false;
+
+      this._retryCount = 0;
       this.accessToken = tokens.access_token;
       this.expiresAt = Date.now() / 1000 + (tokens.expires_in ?? 300);
       if (tokens.refresh_token) {
@@ -115,11 +147,28 @@ class LoginSession {
         } : undefined);
       this._onSessionChange();
       this.startRefreshTimer();
+      return true;
     } catch (e: any) {
       console.error(`OIDC refresh failed for ${this.connectionName}:`, e);
-      clearTokensFromConfig(this.connectionName);
-      _sessions.delete(this.connectionName);
-      this._onSessionChange();
+      if (!this._active) return false;
+      // Only a REJECTED grant ends the session — the refresh token is
+      // expired, revoked, or wrong, and only a new login can fix that. That
+      // means 400/401 from the TOKEN ENDPOINT specifically: a 429 rate limit
+      // or a 408 from a proxy is transient and must not log the user out.
+      // Transient failures retry — but not forever: after ~10 minutes of
+      // failures the stale session only masks the outage, so it ends too.
+      const msg = String(e?.message ?? e);
+      const rejected =
+        /invalid_grant|invalid_client/.test(msg) ||
+        /^Token exchange failed: HTTP 40[01]:/.test(msg);
+      if (rejected || ++this._retryCount > 20) {
+        clearTokensFromConfig(this.connectionName);
+        _sessions.delete(this.connectionName);
+        this._onSessionChange();
+      } else {
+        this._refreshTimer = setTimeout(() => void this.refreshNow(), 30000);
+      }
+      return false;
     }
   }
 }
@@ -131,22 +180,38 @@ function configPath(): string {
     path.join(os.homedir(), '.hugr', 'connections.json');
 }
 
-function loadConfig(): { default?: string; connections: any[]; [key: string]: unknown } {
+/**
+ * Read the shared config. A MISSING file is a real empty config; an
+ * UNPARSEABLE one is somebody else's write in flight (several processes share
+ * this file: this extension, the kernel, the JupyterLab service) and is
+ * returned as null — a caller that "repaired" it to `{connections: []}` and
+ * saved would delete every connection the user has.
+ */
+function loadConfig(): { default?: string; connections: any[]; [key: string]: unknown } | null {
   const p = configPath();
+  let raw: string;
   try {
-    return JSON.parse(fs.readFileSync(p, 'utf-8'));
+    raw = fs.readFileSync(p, 'utf-8');
   } catch {
     return { connections: [] };
   }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
+/** Write-to-temp + rename, so no other process ever reads a torn file. */
 function saveConfig(cfg: any): void {
   const p = configPath();
   const dir = path.dirname(p);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + '\n', 'utf-8');
+  const tmp = path.join(dir, `.connections.json.${process.pid}.tmp`);
+  fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2) + '\n', 'utf-8');
+  fs.renameSync(tmp, p);
 }
 
 function writeTokensToConfig(
@@ -156,6 +221,10 @@ function writeTokensToConfig(
   oidcMeta?: { issuer: string; client_id: string; token_endpoint: string },
 ): void {
   const cfg = loadConfig();
+  if (!cfg) {
+    console.warn('hugr: connections.json unreadable, token not persisted');
+    return;
+  }
   for (const conn of cfg.connections || []) {
     if (conn.name === connectionName) {
       conn.tokens = {
@@ -173,6 +242,10 @@ function writeTokensToConfig(
 
 function clearTokensFromConfig(connectionName: string): void {
   const cfg = loadConfig();
+  if (!cfg) {
+    console.warn('hugr: connections.json unreadable, tokens not cleared');
+    return;
+  }
   for (const conn of cfg.connections || []) {
     if (conn.name === connectionName) {
       delete conn.tokens;
@@ -482,14 +555,27 @@ export function isAuthenticated(connectionName: string): boolean {
   return !!session && session.expiresAt > Date.now() / 1000;
 }
 
-export function getToken(connectionName: string): { access_token: string; expires_at: number } | null {
-  const session = _sessions.get(connectionName);
+/**
+ * The token to put on a request RIGHT NOW: fresh as-is, or refreshed first.
+ *
+ * This is the correctness path — the proactive timer is only an optimization
+ * (it can oversleep, or lose one round to a network hiccup), so a request
+ * near expiry refreshes inline and waits. Concurrent callers share one
+ * refresh via refreshNow().
+ */
+export async function getValidToken(
+  connectionName: string,
+): Promise<{ access_token: string; expires_at: number } | null> {
+  let session = _sessions.get(connectionName);
   if (!session) return null;
 
-  // Force refresh if near expiry
   if (session.expiresAt - Date.now() / 1000 < 30 && session.refreshToken) {
-    // Refresh is async, return current token anyway
-    return null;
+    await session.refreshNow();
+    // A rejected grant deletes the session; a transient failure keeps it and
+    // the stale token below is still the best answer we have — the server's
+    // 401 says more than a silent missing header would.
+    session = _sessions.get(connectionName);
+    if (!session) return null;
   }
 
   return {
@@ -505,6 +591,11 @@ export async function restoreSessionsOnStartup(
   onSessionChange: () => void,
 ): Promise<void> {
   const cfg = loadConfig();
+  if (!cfg) {
+    // Mid-write or corrupt — touching it now could only make it worse.
+    return;
+  }
+  let cfgChanged = false;
   for (const conn of cfg.connections || []) {
     if (conn.auth_type !== 'browser') continue;
 
@@ -516,21 +607,20 @@ export async function restoreSessionsOnStartup(
     const issuer = oidcMeta?.issuer ?? '';
     const clientId = oidcMeta?.client_id ?? '';
     const tokenEndpoint = oidcMeta?.token_endpoint ?? '';
+    const refreshToken = await secrets.get(`hugr.oidc.refresh.${conn.name}`) ?? '';
+    const expired = expiresAt <= Date.now() / 1000;
 
-    if (expiresAt <= Date.now() / 1000) {
-      // Expired — try to refresh if we have stored refresh token + endpoint info
-      const refreshToken = await secrets.get(`hugr.oidc.refresh.${conn.name}`);
-      if (!refreshToken || !tokenEndpoint) {
-        delete conn.tokens;
-        continue;
-      }
-      // Will try refresh below
+    if (expired && (!refreshToken || !tokenEndpoint)) {
+      // Nothing to refresh with — this login is over.
       delete conn.tokens;
+      cfgChanged = true;
       continue;
     }
 
-    // Token still valid — create session with OIDC metadata for logout/refresh
-    const refreshToken = await secrets.get(`hugr.oidc.refresh.${conn.name}`) ?? '';
+    // Live token, or an expired one we can refresh: either way the session
+    // exists — an access token that outlives a VS Code restart is the
+    // exception, not the rule, so an expired one on startup must refresh
+    // rather than log the user out.
     const session = new LoginSession(
       conn.name,
       refreshToken,
@@ -545,11 +635,17 @@ export async function restoreSessionsOnStartup(
     );
     _sessions.set(conn.name, session);
     if (refreshToken && tokenEndpoint) {
-      session.startRefreshTimer();
+      if (expired) {
+        void session.refreshNow();
+      } else {
+        session.startRefreshTimer();
+      }
     }
   }
 
-  saveConfig(cfg);
+  if (cfgChanged) {
+    saveConfig(cfg);
+  }
   onSessionChange();
 }
 

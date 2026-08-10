@@ -16,6 +16,13 @@ export interface HugrClientOptions {
   authType?: 'public' | 'api_key' | 'bearer';
   apiKey?: string;
   token?: string;
+  /**
+   * Resolves the bearer token PER REQUEST. Long-lived clients (the explorer
+   * panels hold theirs for the life of a connection) must not freeze a token
+   * by value — a refreshed token has to reach every request, and an expiring
+   * one has to be refreshed before it is sent. Wins over `token` when set.
+   */
+  tokenProvider?: () => Promise<string | null>;
   timeout?: number;
   tlsSkipVerify?: boolean;
 }
@@ -141,6 +148,7 @@ export class HugrClient {
   private _authType: 'public' | 'api_key' | 'bearer';
   private _apiKey?: string;
   private _token?: string;
+  private _tokenProvider?: () => Promise<string | null>;
   private _timeout: number;
   private _tlsSkipVerify: boolean;
   private _aborted = false;
@@ -150,7 +158,10 @@ export class HugrClient {
     this._authType = options.authType ?? 'public';
     this._apiKey = options.apiKey;
     this._token = options.token;
-    this._timeout = options.timeout ?? 10000;
+    this._tokenProvider = options.tokenProvider;
+    // Metadata queries on a large model (a module with thousands of objects,
+    // a _search over 200k entities) legitimately take more than 10s.
+    this._timeout = options.timeout ?? 30000;
     this._tlsSkipVerify = options.tlsSkipVerify ?? false;
   }
 
@@ -181,8 +192,11 @@ export class HugrClient {
 
     if (this._authType === 'api_key' && this._apiKey) {
       headers['X-Api-Key'] = this._apiKey;
-    } else if (this._authType === 'bearer' && this._token) {
-      headers['Authorization'] = `Bearer ${this._token}`;
+    } else if (this._authType === 'bearer') {
+      const token = this._tokenProvider ? await this._tokenProvider() : this._token;
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
     }
 
     const raw = await this._post(this._url, bodyStr, headers);

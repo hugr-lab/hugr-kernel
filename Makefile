@@ -5,8 +5,9 @@ EXT_DIR := $(CURDIR)/extensions/jupyterlab
 VSCODE_DIR := $(CURDIR)/extensions/vscode
 PYTHON := .venv/bin/python
 VENV_LABEXT := $(CURDIR)/.venv/share/jupyter/labextensions
+LAB_PORT ?= 8899
 
-.PHONY: build install install-dev clean test \
+.PHONY: build install install-dev clean test lab \
 	build-kernel build-ext build-vscode build-extensions \
 	install-ext install-duckdb-extensions install-duckdb-extensions-dev install-jupyterlab
 
@@ -71,6 +72,18 @@ install-duckdb-extensions-dev:
 # Full JupyterLab setup (build + install dev kernel + everything)
 install-jupyterlab: install-dev
 	@echo "JupyterLab ready. Run: uv run jupyter lab"
+
+# --- Dev run ---
+
+# Rebuild the JupyterLab extension and (re)start JupyterLab for visual review.
+# The server is restarted on purpose: the Python connection service only loads
+# at startup, so a rebuild-plus-browser-refresh is not enough when it changed.
+# A previous instance on the port is stopped first — repeated runs just work.
+# First-time setup is `make install-jupyterlab`.
+lab:
+	cd $(EXT_DIR) && uv run jlpm build
+	-uv run jupyter lab stop $(LAB_PORT) 2>/dev/null
+	uv run jupyter lab --port $(LAB_PORT)
 
 # --- Test ---
 
